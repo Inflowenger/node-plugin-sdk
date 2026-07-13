@@ -1,0 +1,57 @@
+{
+  "name": "@inflowenger/node-plugin-sdk",
+  "version": "0.0.1",
+  "description": "Node.js/TypeScript SDK for building Inflowenger Plugin nodes (inflowv1 protocol) — the Node port of go-plugin-sdk.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepare": "npm run build",
+    "example:http": "tsx examples/http-call.ts",
+    "example:rpc": "tsx examples/rpc.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Inflowenger/node-plugin-sdk.git"
+  },
+  "homepage": "https://github.com/Inflowenger/node-plugin-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/Inflowenger/node-plugin-sdk/issues"
+  },
+  "keywords": [
+    "inflowenger",
+    "inflow",
+    "plugin",
+    "workflow",
+    "nats",
+    "sdk",
+    "inflowv1"
+  ],
+  "author": "inflow Dev. Team",
+  "license": "SEE LICENSE IN https://github.com/Inflowenger/go-plugin-sdk",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "nats": "^2.29.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  }
+}
