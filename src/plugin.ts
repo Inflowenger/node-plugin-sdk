@@ -48,9 +48,14 @@ export class Plugin implements IPlugin {
     this.actions.push(...act);
   }
 
-  // NOTE: like the Go SDK, meta functions have wiring (metaFuncHandler) but no
-  // exported registration method yet, so `metaFn` stays empty for now. Use the
-  // settings submitHandler for live validation today.
+  /**
+   * Register one or more meta methods (see the Meta type). Each is served as a
+   * synchronous RPC on inflow.v1.<PLUGIN_ID>.<method>; call it before start().
+   * Mirrors Go's AddMeta.
+   */
+  addMeta(...meta: Meta[]): void {
+    this.metaFn.push(...meta);
+  }
 
   /** Wire up all subscriptions. Returns immediately — keep the process alive after. */
   start(): void {

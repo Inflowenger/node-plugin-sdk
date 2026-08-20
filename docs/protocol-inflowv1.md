@@ -41,8 +41,9 @@ Job command `<CMD>` values:
 | `progress` | `job.progress` / `job.done` / `job.doneWithError` | Report progress `0–100` (100 = finished). |
 | `context/current` | `job.cmdGetCurrentScope` | Read the current context scope. |
 | `context/path` | `job.cmdGetScope` | Read context by JSON path. |
-| `commit` | `job.cmdSetOnPath` | Write data into context at a JSON path. |
-| `stop` | `job.cmdStopFlow` | Stop the whole flow. |
+| `commit` | `job.cmdSetOnPath` | Write data into context at a JSON path (`commit_on`). |
+| `next_tags` | `job.cmdNextFilter` | Route outbound ports: keep only the named tags (comma-joined). |
+| `request/svc.<ACTION>` | `job.cmdSvcCall` | Call a backend service through the runtime. The action rides in the subject (`request/svc.log`, …); the runtime cuts the prefix and re-issues the request to the bare action on the plugin space. Payload is a `{data, op}` envelope, forwarded with an `origin: plugin:<node title>` header so the backend can refuse ungranted plugin-originated calls. |
 
 ## The request → job handshake
 

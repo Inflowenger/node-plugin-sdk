@@ -3,7 +3,8 @@
 Everything a plugin *does* happens inside a `Job`. When the runtime executes one of
 your actions, the SDK acknowledges the request with a fresh `jobId` and hands your
 `requestHandler` a `Job` bound to that id and to the NATS connection. Through it you
-report progress, read/write the flow's context, finish the job, or stop the flow.
+report progress, read/write the flow's context, route outbound branches, call
+downstream services, and finish the job.
 
 ```ts
 class Job {
@@ -60,13 +61,20 @@ await job.done({ status: "ok", body: result });
 // Success, committing on an explicit key path (segments joined by ".")
 await job.done(payload, "result", "http");
 
-// Failure — completes with an error payload.
+// Failure — reports the reason as this node's only detail.
 await job.doneWithError("upstream returned 500");
+
+// Failure that still carries state — `data` is reported (and committed, at the
+// optional key) next to the reason, which always lands on details.error.
+await job.doneWithErrorData("rate limited", { cursor, conversation }, "state");
 ```
 
-Both are a `progress` command at `100`: `done` sends `{progress:100, details:data,
-commit_on:key}`, `doneWithError` sends `{progress:100, details:{error}}`. Call exactly
-one before the handler returns.
+All are a `progress` command at `100`: `done` sends `{progress:100, details:data,
+commit_on:key}`, and `doneWithError` delegates to `doneWithErrorData`, which merges
+`data` with `{error}` (the reason always wins the `error` key). A terminal command's
+details **are** what gets committed onto the node's scope, so a bare `doneWithError`
+drops anything the node had persisted there — hand it back through `doneWithErrorData`
+to keep it. Call exactly one before the handler returns.
 
 ## Reading the flow context
 
@@ -93,14 +101,29 @@ This is a `commit` command carrying `{commit_on: path, details: data}`. This is 
 plugin **injects** results that downstream nodes read — distinct from `job.done`,
 which emits the node's own output.
 
-## Stopping the flow
+## Routing outbound branches
+
+An action can declare `outbound` ports (see [form-builder.md](form-builder.md) /
+`Action.outbound`); at runtime the handler chooses which branch(es) fire by naming
+their tags. Edges carrying other tags are skipped.
 
 ```ts
-await job.cmdStopFlow();
+await job.cmdNextFilter(["approved"]);      // fire only the "approved" branch
 ```
 
-Use it for guard conditions — a validation failure or business rule that should abort
-everything downstream, not just fail this one node.
+## Plugin-originated service calls
+
+A handler can call a downstream service itself, mid-job, rather than only emitting
+its result at the end:
+
+```ts
+const reply = await job.cmdSvcCall("some.service", { q: "term" }, { op: "search" });
+console.log(new TextDecoder().decode(reply));
+```
+
+`action` names the service, the second argument is the payload, the third is
+optional operation metadata (sent as `op`). It publishes to
+`inflow.cpu.<PLUGIN_ID>.<JOB_ID>.request/svc.<action>`.
 
 ## Command reference
 
@@ -109,10 +132,12 @@ everything downstream, not just fail this one node.
 | `progress(pct, frame)`      | `progress`        | `{progress, frame}` | ack bytes |
 | `done(data, ...key)`        | `progress`        | `{progress:100, details, commit_on}` | ack bytes |
 | `doneWithError(msg)`        | `progress`        | `{progress:100, details:{error}}` | ack bytes |
+| `doneWithErrorData(msg, data, ...key)` | `progress` | `{progress:100, details:{...data, error}, commit_on}` | ack bytes |
 | `cmdGetCurrentScope()`      | `context/current` | — | context bytes |
 | `cmdGetScope(jsonPath)`     | `context/path`    | `jsonPath` | context bytes |
 | `cmdSetOnPath(jsonPath, o)` | `commit`          | `{commit_on, details}` | ack bytes |
-| `cmdStopFlow()`             | `stop`            | — | ack bytes |
+| `cmdNextFilter(tags)`       | `next_tags`       | `tags.join(",")` | ack bytes |
+| `cmdSvcCall(action, data, op)` | `request/svc.<action>` | `{data, op}` | reply bytes |
 
 ## A complete handler
 

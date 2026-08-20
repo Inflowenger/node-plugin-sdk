@@ -53,11 +53,13 @@ export function introHandler(p: Plugin): void {
 export function settingsHandler(p: Plugin): void {
   const nc = p.infraConn.connection;
 
-  // show the settings form
+  // show the settings form. A plugin that requires nothing still answers, with
+  // an empty object: an empty body is not JSON, so a caller could not tell
+  // "asks for nothing" from "not running".
   nc.subscribe(makeSettingsSubject(p.pluginId), {
     callback: (_err, msg) => {
       if (!p.settingsData) {
-        msg.respond(new Uint8Array(0));
+        msg.respond(encoder.encode("{}"));
         return;
       }
       msg.respond(json(p.settingsData));

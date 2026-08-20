@@ -16,7 +16,6 @@ async function main() {
       const scope = await job.cmdGetScope("$.OPA");
       console.log("Scope : ", new TextDecoder().decode(scope));
 
-      // await job.cmdStopFlow();
       await job.done({ action: "done" });
     },
   });

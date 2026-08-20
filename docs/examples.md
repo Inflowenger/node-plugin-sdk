@@ -86,7 +86,6 @@ p.addAction({
     console.log("GetCurrent", new TextDecoder().decode(await job.cmdGetCurrentScope()));
     console.log("Scope :", new TextDecoder().decode(await job.cmdGetScope("$.OPA")));
     await job.cmdSetOnPath(`$["doc appendix"]`, { itemXterm: [1, 3, 42, 2300] });
-    // await job.cmdStopFlow();  // uncomment to abort the whole flow here
     await job.done({ action: "done finally...." });
   },
 });
@@ -119,7 +118,6 @@ p.addAction({
   requestHandler: async (job: Job) => {
     console.log("GetCurrent", new TextDecoder().decode(await job.cmdGetCurrentScope()));
     console.log("Scope :", new TextDecoder().decode(await job.cmdGetScope("$.OPA")));
-    // await job.cmdStopFlow();
     await job.done({ action: "done" });
   },
 });

@@ -240,14 +240,23 @@ Separate from `job.done(...)`: `cmdSetOnPath` writes into shared context mid-run
 
 ---
 
-## Skill 11 — Stop the whole flow
+## Skill 11 — Route branches, call services, fail with state
 
 ```ts
-if (!allowed) {
-  await job.cmdStopFlow();
-  return;
-}
+// Fire only the outbound branch(es) whose tags are named (see Action.outbound).
+await job.cmdNextFilter(["approved"]);
+
+// Call a downstream service mid-job; resolves to its reply bytes.
+const reply = await job.cmdSvcCall("some.service", { q: "term" }, { op: "search" });
+
+// Fail, but keep state the flow needs — reported (and committed) next to the reason.
+await job.doneWithErrorData("rate limited", { cursor }, "state");
+return;
 ```
+
+Failing does **not** stop the flow — downstream nodes still run. A terminal command's
+details are what commit onto the node's scope, so use `doneWithErrorData` (not the
+bare `doneWithError`) whenever the node had persisted state it must not drop.
 
 ---
 
@@ -265,9 +274,11 @@ p.requiredParams({
 });
 ```
 
-> **Note:** live per-field validation via **meta functions** is defined in the
-> protocol but has **no exported registration method yet** (same as the Go SDK). Use
-> `submitHandler`, which is fully wired.
+> **Note:** register live **meta functions** with `p.addMeta({ method, requestHandler })`
+> before `start()`; each is served on `inflow.v1.<PLUGIN_ID>.<method>` and its return
+> value is marshalled verbatim. Set `submit_to` on a form to name one for on-submit
+> validation, or hang a `formkit` `.lookup(fn, label)` button off a field. See
+> [docs/form-builder.md](docs/form-builder.md).
 
 ---
 

@@ -2,6 +2,7 @@
 import type { Msg } from "nats";
 import { Command } from "./types.js";
 import type {
+  CallSvcBody,
   CommandPayload,
   Frame,
   IPlugin,
@@ -36,11 +37,34 @@ export class Job {
     });
   }
 
-  /** Complete the job with an error payload. */
+  /** End the job as failed, reporting the reason as its only detail. */
   async doneWithError(error: string): Promise<Uint8Array> {
+    return this.doneWithErrorData(error, null);
+  }
+
+  /**
+   * End the job as failed exactly like doneWithError, but keep a payload: `data`
+   * is reported (and committed, at `key` when given) next to the reason, which
+   * always lands on the canonical "error" detail — so a key named "error" inside
+   * `data` is overwritten.
+   *
+   * Use it when the failure still carries something the flow needs: a terminal
+   * command's details ARE what gets committed onto the node's scope, so a bare
+   * doneWithError reports only "error" and anything the node had persisted there
+   * (a conversation, a cursor) is gone by the next read. Hand it back through
+   * `data` to keep it.
+   */
+  async doneWithErrorData(
+    error: string,
+    data: Record<string, unknown> | null,
+    ...key: string[]
+  ): Promise<Uint8Array> {
+    const details: Record<string, unknown> = { ...(data ?? {}) };
+    details.error = error;
     return this.command(Command.Progress, {
       progress: 100,
-      details: { error },
+      details,
+      commit_on: key.join("."),
     });
   }
 
@@ -59,17 +83,38 @@ export class Job {
     return msg.data;
   }
 
+  /**
+   * Fire only the outbound branch(es) whose tags are named — the runtime
+   * counterpart of Action.outbound. Edges carrying other tags are skipped.
+   */
+  async cmdNextFilter(nextsTags: string[]): Promise<Uint8Array> {
+    const sub = this.makeJobSubject(Command.NextTags);
+    const msg = await this.send(sub, encoder.encode(nextsTags.join(",")));
+    return msg.data;
+  }
+
+  /**
+   * Make a plugin-originated call to a downstream service. `action` names the
+   * service, `data` is the payload, `opData` carries operation metadata.
+   */
+  async cmdSvcCall(
+    action: string,
+    data: unknown,
+    opData?: Record<string, unknown>,
+  ): Promise<Uint8Array> {
+    if (action.trim() === "") {
+      throw new Error("invalid subject");
+    }
+    const envelope: CallSvcBody = { data, op: opData };
+    const sub = this.makeCallSvcSubject(action);
+    const msg = await this.send(sub, encoder.encode(JSON.stringify(envelope)));
+    return msg.data;
+  }
+
   /** Read a slice of context addressed by JSON path (e.g. "$.OPA"). */
   async cmdGetScope(jsonPath: string): Promise<Uint8Array> {
     const sub = this.makeJobSubject(Command.ContextPath);
     const msg = await this.send(sub, encoder.encode(jsonPath));
-    return msg.data;
-  }
-
-  /** Stop the entire workflow run. */
-  async cmdStopFlow(): Promise<Uint8Array> {
-    const sub = this.makeJobSubject(Command.Stop);
-    const msg = await this.send(sub, new Uint8Array(0));
     return msg.data;
   }
 
@@ -98,5 +143,10 @@ export class Job {
   /** inflow.cpu.<PLUGIN_ID>.<JOB_ID>.<cmd> */
   private makeJobSubject(cmd: Command): string {
     return `inflow.cpu.${this.plugin.getPluginId()}.${this.jobId}.${cmd}`;
+  }
+
+  /** inflow.cpu.<PLUGIN_ID>.<JOB_ID>.request/svc.<action> */
+  private makeCallSvcSubject(action: string): string {
+    return `inflow.cpu.${this.plugin.getPluginId()}.${this.jobId}.${Command.Request}.${action}`;
   }
 }

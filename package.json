@@ -40,7 +40,7 @@
     "sdk",
     "inflowv1"
   ],
-  "author": "inflow Dev. Team",
+  "author": "Inflowenger (https://inflowenger.com)",
   "license": "SEE LICENSE IN https://github.com/Inflowenger/go-plugin-sdk",
   "engines": {
     "node": ">=18"

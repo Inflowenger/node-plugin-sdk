@@ -22,7 +22,8 @@ before relying on any signature; do not invent methods.
 
 Use this when building or modifying an inflow **plugin** node in **Node/TypeScript**:
 scaffolding a plugin, adding/editing an action, decoding request bodies, progress
-reporting, flow-context read/write, stopping a flow, or action/settings forms.
+reporting, flow-context read/write, routing outbound branches, calling downstream
+services, meta functions, or action/settings forms.
 
 Do **not** use this for **extrinsic** nodes (internal service calls via inflow-fusion,
 a different repo), nor for the Go SDK.
@@ -73,23 +74,35 @@ a different repo), nor for the Go SDK.
    - `castRequestTo<T>(job.req.data)` — typed input (rule 4).
    - `job.progress(pct, { title, content })` — advisory, 0–100; does not finish.
    - `job.done(obj, ...key)` — success + output (finishes).
-   - `job.doneWithError(str)` — failure (finishes).
+   - `job.doneWithError(str)` — failure, reason only (finishes).
+   - `job.doneWithErrorData(str, obj, ...key)` — failure that keeps a payload/state
+     alongside the reason (finishes).
    - `job.cmdGetCurrentScope()` / `job.cmdGetScope("$.path")` — read context; both
      resolve to a `Uint8Array` (decode with `TextDecoder`).
    - `job.cmdSetOnPath("$.path", obj)` — write into flow context.
-   - `job.cmdStopFlow()` — abort the whole flow.
-4. **Add forms** when the node needs configuration:
-   `form: { jsonschema: JSON.stringify(schema), jsonui: JSON.stringify(ui) }`
-   (JSON Forms). Plugin-level onboarding/config: `p.requiredParams({ ..., submitHandler })`.
+   - `job.cmdNextFilter(tags)` — fire only the outbound branch(es) with these tags.
+   - `job.cmdSvcCall(action, data, op?)` — call a downstream service mid-job.
+4. **Add forms** when the node needs configuration. Either hand-write JSON Forms —
+   `form: { jsonschema: JSON.stringify(schema), jsonui: JSON.stringify(ui) }` — or
+   build both documents from one declaration with the `formkit` namespace:
+   `import { formkit } from "@inflowenger/node-plugin-sdk"`, then
+   `form: formkit.form("Title").add(formkit.text("k","K").required()).build()`.
+   Plugin-level onboarding/config: `p.requiredParams({ ..., submitHandler })` (or
+   `formkit.form(...).settings(handler)`). Register live meta functions with
+   `p.addMeta({ method, requestHandler })` before `start()`.
 5. **Build & run**: `npm run build` then run the entry, or `npx tsx your-plugin.ts`.
    The SDK logs each subscribed subject on startup. Verify by adding the node to a
    flow and running it.
 
-## Known limitations to respect
+## Meta functions & form buttons
 
-- **Meta functions** (live per-field form validation) are defined in the protocol but
-  have **no exported registration method yet** (same as the Go SDK). Use the settings
-  `submitHandler`, which is wired. Do not call a non-existent meta-registration API.
+- **Meta functions** are live request/reply handlers the form can call while open —
+  register with `p.addMeta({ method, requestHandler })` before `start()`; each is
+  served on `inflow.v1.<PLUGIN_ID>.<method>`. The handler returns any JSON-able value,
+  marshalled **verbatim** (a `Response`, a bare array, or a `formkit` patch/envelope).
+- A form button (`formkit` `.lookup(fn, label)`, or a hand-written `x-inflow-ui`
+  control) calls a meta function and patches the answer back into the open form — one
+  match via `formkit.success(...).patch({...})`, several via `formkit.choose(...)`.
 - If asked about **extrinsic** nodes, redirect to inflow-fusion; not part of this SDK.
 
 ## Verify before finishing

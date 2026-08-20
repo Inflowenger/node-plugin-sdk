@@ -192,9 +192,6 @@ async (job: Job) => {
   // Write into the flow's context at a JSON path.
   await job.cmdSetOnPath(`$["result"]`, { count: 42 });
 
-  // Optionally abort the whole flow.
-  // await job.cmdStopFlow();
-
   // Finish. Progress hits 100 and the payload is committed as output.
   await job.done({ ok: true });
 }
@@ -204,11 +201,13 @@ async (job: Job) => {
 |--------|--------|
 | `job.progress(pct, frame)` | Report progress `0–100` with a titled status frame. |
 | `job.done(data, ...key)`   | Complete (progress 100) and emit `data`; optional key path to commit on. |
-| `job.doneWithError(msg)`   | Complete with an error payload. |
+| `job.doneWithError(msg)`   | Complete as failed, reporting `msg` as the only detail. |
+| `job.doneWithErrorData(msg, data, ...key)` | Complete as failed but keep `data` (and commit it) alongside the reason. |
 | `job.cmdGetCurrentScope()` | Fetch the current context scope (`Uint8Array`). |
 | `job.cmdGetScope(path)`    | Fetch a slice of context by JSON path. |
 | `job.cmdSetOnPath(path, o)`| Commit data into the flow context at a JSON path. |
-| `job.cmdStopFlow()`        | Stop the entire workflow run. |
+| `job.cmdNextFilter(tags)`  | Fire only the outbound branch(es) whose tags are named. |
+| `job.cmdSvcCall(action, data, op?)` | Call a downstream service mid-job; resolves to its reply. |
 
 Full semantics and the underlying subjects: [docs/jobs-and-commands.md](docs/jobs-and-commands.md).
 
@@ -276,8 +275,8 @@ node-plugin-sdk/
 This is a faithful port of [`go-plugin-sdk`](https://github.com/Inflowenger/go-plugin-sdk): same subjects, same payloads,
 same lifecycle. Naming follows each language's idiom (Go's `NewPlugin`/`AddAction` →
 `newPlugin`/`addAction`; `job.Done` → `job.done`), and blocking I/O is `async`/`await`
-instead of Go's synchronous calls. Like the Go SDK, meta-function **registration** is
-not exported yet — use the settings `submitHandler` for live validation.
+instead of Go's synchronous calls. This includes the `formkit` form builder (as the
+`formkit` namespace) and meta-function registration via `p.addMeta(...)`.
 
 ## License
 

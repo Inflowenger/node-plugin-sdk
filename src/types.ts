@@ -2,8 +2,11 @@
 // Mirrors sdkv1/types.go.
 export enum Command {
   Progress = "progress",
-  Stop = "stop",
   ContextCurrent = "context/current",
   ContextPath = "context/path",
   Commit = "commit",
+  /** next_tags — fire only the outbound branch(es) whose tags are named. */
+  NextTags = "next_tags",
+  /** request/svc — a plugin-originated call to a downstream service. */
+  Request = "request/svc",
 }

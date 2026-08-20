@@ -25,6 +25,7 @@ export type {
   Icon,
   FormBuilder,
   Action,
+  OutboundPort,
   Settings,
   Meta,
   Frame,
@@ -33,4 +34,10 @@ export type {
   Response,
   Request,
   RequestBody,
+  ActionRequestContent,
+  CallSvcBody,
 } from "./models.js";
+
+// formkit — optional form builder (JSON Schema + JSON Forms UI Schema).
+// Mirrors the Go `formkit` package; use as `formkit.form(...)`, `formkit.text(...)`.
+export * as formkit from "./formkit/index.js";
