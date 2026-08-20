@@ -59,29 +59,26 @@ For the concepts, see [docs/architecture.md](docs/architecture.md).
 
 ## Installation
 
-> **Not on the npm registry yet.** Install it **from git**. npm clones the repo and
-> runs the package's `prepare` script to compile `dist/` on install — no separate
-> build step needed.
-
-**From the GitHub repo:**
+Install it from the npm registry:
 
 ```bash
-npm install github:Inflowenger/node-plugin-sdk
+npm install @inflowenger/node-plugin-sdk
 ```
 
-**Or pin it in your `package.json`** and `npm install`:
+Or add it to your `package.json` `dependencies` and `npm install`:
 
 ```jsonc
 {
   "dependencies": {
-    "@inflowenger/node-plugin-sdk": "github:Inflowenger/node-plugin-sdk"
+    "@inflowenger/node-plugin-sdk": "^0.0.1"
   }
 }
 ```
 
-> Pin a tag or commit for reproducible installs, e.g.
-> `github:Inflowenger/node-plugin-sdk#v0.0.1`. Once the package is published, plain
-> `npm install @inflowenger/node-plugin-sdk` will be the norm.
+> Installing from git also works if you need an unreleased commit —
+> `npm install github:Inflowenger/node-plugin-sdk#v0.0.1` (npm runs the package's
+> `prepare` script to compile `dist/` on install). Prefer the registry for
+> reproducible, versioned installs.
 
 Requires **Node 18+** (uses the global `fetch` and Web Crypto). ESM only. A reachable
 Inflowenger platform (Infra + at least one Fractal) is needed to run against — see
