@@ -21,6 +21,16 @@ export type PluginOption = (p: Plugin) => void | Promise<void>;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Default NATS request/reply deadline for Send, in ms, when the plugin author
+ * doesn't set one. A conservative 5s: fine for the fast RPCs (account list,
+ * settings test, a single email send). A plugin whose actions proxy slower
+ * upstream calls — a multi-message search, a large fetch — should raise it in
+ * code with withSendTimeout(), since the deadline must sit above whatever the
+ * backend needs to answer or the reply is abandoned mid-flight.
+ */
+export const DEFAULT_SEND_TIMEOUT_MS = 5_000;
+
 export class Plugin implements IPlugin {
   pluginId = "";
   infraConn!: NatsBox;
@@ -28,6 +38,12 @@ export class Plugin implements IPlugin {
   settingsData?: Settings;
   actions: Action[] = [];
   metaFn: Meta[] = [];
+  /**
+   * NATS request/reply deadline for send(), in ms. Defaults to
+   * DEFAULT_SEND_TIMEOUT_MS; set it in code with the withSendTimeout() option
+   * (or assign directly before start()).
+   */
+  sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS;
 
   getPluginId(): string {
     return this.pluginId;
@@ -66,14 +82,16 @@ export class Plugin implements IPlugin {
   }
 
   /**
-   * NATS request/reply with retry, mirroring Go's Plugin.Send: 3s timeout, up to
-   * 5 attempts, backing off on "no responders".
+   * NATS request/reply with retry: sendTimeoutMs deadline (default 5s, set in
+   * code with withSendTimeout()), up to 5 attempts, backing off on "no
+   * responders". Set the deadline above the backend's upstream ceiling for slow
+   * actions, or a slow reply surfaces as a bare NATS "TIMEOUT".
    */
   async send(subject: string, data: Uint8Array): Promise<Msg> {
     const nc = this.infraConn.connection;
     for (let retry = 0; retry < 5; retry++) {
       try {
-        const msg = await nc.request(subject, data, { timeout: 3000 });
+        const msg = await nc.request(subject, data, { timeout: this.sendTimeoutMs });
         return msg;
       } catch (err) {
         if (isNoResponders(err)) {
@@ -128,5 +146,16 @@ export function withInfraConnection(
 ): PluginOption {
   return async (p) => {
     p.infraConn = await NatsBox.create(credential, infraUrl);
+  };
+}
+
+/**
+ * Set the NATS request/reply deadline for send(), in SECONDS. Declare it where
+ * the plugin is constructed, e.g. newPlugin(withDotEnv(f), withTimeout(65)).
+ * Omit it to keep the default (5s). A non-positive value is ignored.
+ */
+export function withTimeout(seconds: number): PluginOption {
+  return (p) => {
+    if (Number.isFinite(seconds) && seconds > 0) p.sendTimeoutMs = seconds * 1000;
   };
 }

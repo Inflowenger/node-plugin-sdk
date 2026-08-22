@@ -96,6 +96,20 @@ A plugin needs three values, via a dotenv file (or the explicit options):
 | `INFRA_CRED` | **Base64-encoded** NATS user credentials (JWT + NKey seed) minted by Infra. |
 | `INFRA_URL`  | NATS endpoint of the platform, e.g. `localhost:4222`.                   |
 
+### Send timeout
+
+The NATS request/reply deadline for `Plugin.send` defaults to **5s**
+(`DEFAULT_SEND_TIMEOUT_MS`). It is set **in code**, not via env — a plugin whose
+actions proxy slow upstream calls (a multi-message search, a large fetch) must
+raise it above whatever the backend needs to answer, or a slow reply surfaces as
+a bare `TIMEOUT`:
+
+```ts
+import { newPlugin, withDotEnv, withTimeout } from "@inflowenger/node-plugin-sdk";
+
+const p = await newPlugin(withDotEnv(".env.inflow"), withTimeout(65)); // seconds
+```
+
 ```env
 # .env.inflow
 PLUGIN_ID=aa-bbb-ccc-dddd

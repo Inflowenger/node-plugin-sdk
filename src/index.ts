@@ -7,6 +7,8 @@ export {
   withDotEnv,
   withPluginId,
   withInfraConnection,
+  withTimeout,
+  DEFAULT_SEND_TIMEOUT_MS,
   type PluginOption,
 } from "./plugin.js";
 
