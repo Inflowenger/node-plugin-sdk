@@ -98,16 +98,26 @@ A plugin needs three values, via a dotenv file (or the explicit options):
 
 ### Send timeout
 
-The NATS request/reply deadline for `Plugin.send` defaults to **5s**
-(`DEFAULT_SEND_TIMEOUT_MS`). It is set **in code**, not via env — a plugin whose
-actions proxy slow upstream calls (a multi-message search, a large fetch) must
-raise it above whatever the backend needs to answer, or a slow reply surfaces as
-a bare `TIMEOUT`:
+The NATS request/reply deadline for `Plugin.send` resolves in this order:
+
+1. **`REQ_TIMEOUT` env var (seconds)** — an operator override at deploy time, for
+   a slow network or a strict SLA, without touching code. Wins over everything.
+2. **`withTimeout(seconds)`** — the plugin author's default in code.
+3. **`DEFAULT_SEND_TIMEOUT_MS`** — **5s**, when neither is set.
+
+A plugin whose actions proxy slow upstream calls (a multi-message search, a large
+fetch) must raise the deadline above whatever the backend needs to answer, or a
+slow reply surfaces as a bare `TIMEOUT`:
 
 ```ts
 import { newPlugin, withDotEnv, withTimeout } from "@inflowenger/node-plugin-sdk";
 
 const p = await newPlugin(withDotEnv(".env.inflow"), withTimeout(65)); // seconds
+```
+
+```env
+# override the code default at deploy time (seconds)
+REQ_TIMEOUT=50
 ```
 
 ```env

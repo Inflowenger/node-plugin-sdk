@@ -26,10 +26,34 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * doesn't set one. A conservative 5s: fine for the fast RPCs (account list,
  * settings test, a single email send). A plugin whose actions proxy slower
  * upstream calls — a multi-message search, a large fetch — should raise it in
- * code with withSendTimeout(), since the deadline must sit above whatever the
+ * code with withTimeout(), since the deadline must sit above whatever the
  * backend needs to answer or the reply is abandoned mid-flight.
  */
 export const DEFAULT_SEND_TIMEOUT_MS = 5_000;
+
+/**
+ * Env var, in SECONDS, that overrides the send timeout at deploy time — so an
+ * operator can widen it for a slow network (REQ_TIMEOUT=50) or tighten it,
+ * without touching code. Read once in newPlugin, AFTER the options run, so it
+ * wins over the developer's withTimeout(). See resolveReqTimeoutMs.
+ */
+export const REQ_TIMEOUT_ENV = "REQ_TIMEOUT";
+
+/**
+ * The send timeout from REQ_TIMEOUT (seconds → ms), or undefined when unset,
+ * blank, non-numeric, or non-positive (leaving the code/default value in place).
+ * Read straight from process.env so an unset var is silent — the common case.
+ */
+export function resolveReqTimeoutMs(): number | undefined {
+  const raw = process.env[REQ_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    console.log(`Invalid ${REQ_TIMEOUT_ENV}=${raw}, ignoring`);
+    return undefined;
+  }
+  return seconds * 1000;
+}
 
 export class Plugin implements IPlugin {
   pluginId = "";
@@ -118,6 +142,11 @@ export async function newPlugin(...opts: PluginOption[]): Promise<Plugin> {
   for (const o of opts) {
     await o(p);
   }
+  // Operator override, applied last so REQ_TIMEOUT beats the developer's
+  // withTimeout(). withDotEnv (if used) has already loaded the .env file into
+  // process.env by now.
+  const envTimeout = resolveReqTimeoutMs();
+  if (envTimeout !== undefined) p.sendTimeoutMs = envTimeout;
   return p;
 }
 
@@ -152,7 +181,8 @@ export function withInfraConnection(
 /**
  * Set the NATS request/reply deadline for send(), in SECONDS. Declare it where
  * the plugin is constructed, e.g. newPlugin(withDotEnv(f), withTimeout(65)).
- * Omit it to keep the default (5s). A non-positive value is ignored.
+ * Omit it to keep the default (5s). A non-positive value is ignored. The
+ * REQ_TIMEOUT env var, when set, overrides this at deploy time.
  */
 export function withTimeout(seconds: number): PluginOption {
   return (p) => {

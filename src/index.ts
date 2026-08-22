@@ -9,6 +9,8 @@ export {
   withInfraConnection,
   withTimeout,
   DEFAULT_SEND_TIMEOUT_MS,
+  REQ_TIMEOUT_ENV,
+  resolveReqTimeoutMs,
   type PluginOption,
 } from "./plugin.js";
 
