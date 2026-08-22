@@ -59,6 +59,18 @@ export interface Action {
    * Leave undefined for the common single-output action.
    */
   outbound?: OutboundPort[];
+  /**
+   * Open bag of string labels for grouping and classifying an action. It lets a
+   * single plugin host several logical products — e.g. a Google plugin bundling
+   * Docs, Sheets and Calendar actions — and tell them apart on the `@actions`
+   * list.
+   *
+   * The reserved key `class` names the sub-product an action belongs to, so the
+   * frontend can group ports by it: `tags.class = "sheet" | "docs" |
+   * "calendar"`. Any other keys are free-form metadata. Optional; leave
+   * undefined for a single-class plugin. Mirrors Go's Action.Tags.
+   */
+  tags?: Record<string, string>;
   /** Not serialized to the wire (functions are dropped by JSON.stringify). */
   requestHandler: JobHandler;
 }
