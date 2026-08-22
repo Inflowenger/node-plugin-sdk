@@ -21,6 +21,17 @@ export interface PluginIntro {
   version: string;
   /** Optional onboarding form shown when the plugin is first added. */
   settings?: FormBuilder;
+  /**
+   * Optional Markdown document the host renders on the plugin's page (the
+   * FloMorphic Extensions view) — a README/help panel the developer writes to
+   * explain the plugin. Beyond prose, the host upgrades a fenced ```inflow-meta
+   * block, whose body is a meta method name, into a Run button that calls
+   * inflow.v1.<PLUGIN_ID>.<method> through the host proxy and shows the raw JSON
+   * reply beneath it. Since the doc author is also the meta author, no extra
+   * descriptor is needed — the method name in the fence is enough. Mirrors Go's
+   * PluginIntro.Manual.
+   */
+  manual?: string;
 }
 
 /** Icon for an action. */
