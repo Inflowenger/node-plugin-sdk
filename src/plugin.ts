@@ -20,6 +20,7 @@ import type {
 export type PluginOption = (p: Plugin) => void | Promise<void>;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const decoder = new TextDecoder();
 
 /**
  * Default NATS request/reply deadline for Send, in ms, when the plugin author
@@ -111,7 +112,7 @@ export class Plugin implements IPlugin {
    * responders". Set the deadline above the backend's upstream ceiling for slow
    * actions, or a slow reply surfaces as a bare NATS "TIMEOUT".
    */
-  async send(subject: string, data: Uint8Array): Promise<Msg> {
+  async send(subject: string, data: Uint8Array): Promise<Msg | undefined> {
     const nc = this.infraConn.connection;
     for (let retry = 0; retry < 5; retry++) {
       try {
@@ -119,16 +120,26 @@ export class Plugin implements IPlugin {
         return msg;
       } catch (err) {
         if (isNoResponders(err)) {
-          if (retry > 2) {
+          if (retry > 1) {
             console.log(`No responders - retry :${retry}`);
+            console.log(`No responders - body : ${decoder.decode(data)}`);
           }
           await sleep((retry + 1) * 1000);
           continue;
         }
-        throw err;
+        // Mirror Go's Send: log the failing call and return to the caller
+        // instead of throwing. A workflow the user has stopped leaves no
+        // responders, and throwing here would surface as an unhandled
+        // rejection that crashes the whole plugin.
+        console.log("subs : ", subject);
+        console.log("body : ", decoder.decode(data));
+        return undefined;
       }
     }
-    throw new Error("exception occurred");
+    // Retries exhausted (Go returns an "exception occurred" error here).
+    // Return without throwing so a stopped workflow can't crash the plugin.
+    console.log("exception occurred");
+    return undefined;
   }
 }
 

@@ -80,6 +80,7 @@ export class Job {
   async cmdGetCurrentScope(): Promise<Uint8Array> {
     const sub = this.makeJobSubject(Command.ContextCurrent);
     const msg = await this.send(sub, new Uint8Array(0));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
@@ -90,6 +91,7 @@ export class Job {
   async cmdNextFilter(nextsTags: string[]): Promise<Uint8Array> {
     const sub = this.makeJobSubject(Command.NextTags);
     const msg = await this.send(sub, encoder.encode(nextsTags.join(",")));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
@@ -108,6 +110,7 @@ export class Job {
     const envelope: CallSvcBody = { data, op: opData };
     const sub = this.makeCallSvcSubject(action);
     const msg = await this.send(sub, encoder.encode(JSON.stringify(envelope)));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
@@ -115,6 +118,7 @@ export class Job {
   async cmdGetScope(jsonPath: string): Promise<Uint8Array> {
     const sub = this.makeJobSubject(Command.ContextPath);
     const msg = await this.send(sub, encoder.encode(jsonPath));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
@@ -126,6 +130,7 @@ export class Job {
     const content: JobBodyContent = { commit_on: jsonPath, details: data };
     const sub = this.makeJobSubject(Command.Commit);
     const msg = await this.send(sub, encoder.encode(JSON.stringify(content)));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
@@ -133,10 +138,11 @@ export class Job {
   async command(cmd: Command, data: CommandPayload): Promise<Uint8Array> {
     const sub = this.makeJobSubject(cmd);
     const msg = await this.send(sub, encoder.encode(JSON.stringify(data)));
+    if (!msg) return new Uint8Array(0);
     return msg.data;
   }
 
-  private send(sub: string, data: Uint8Array): Promise<Msg> {
+  private send(sub: string, data: Uint8Array): Promise<Msg | undefined> {
     return this.plugin.send(sub, data);
   }
 

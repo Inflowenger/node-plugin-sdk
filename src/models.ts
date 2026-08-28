@@ -7,7 +7,7 @@ import type { Job } from "./job.js";
 
 /** Anything the runtime can talk to over NATS. Mirrors Go's IPlugin. */
 export interface IPlugin {
-  send(subject: string, data: Uint8Array): Promise<Msg>;
+  send(subject: string, data: Uint8Array): Promise<Msg | undefined>;
   getPluginId(): string;
 }
 
