@@ -138,7 +138,7 @@ export class Plugin implements IPlugin {
     }
     // Retries exhausted (Go returns an "exception occurred" error here).
     // Return without throwing so a stopped workflow can't crash the plugin.
-    console.log("exception occurred");
+    console.log("exception occurred or process flow stopped - subs : ", subject);
     return undefined;
   }
 }
