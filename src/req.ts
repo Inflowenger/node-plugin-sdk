@@ -39,12 +39,27 @@ export function castRequestTo<T>(data: Uint8Array): RequestBody<T> {
   return JSON.parse(decoder.decode(data)) as RequestBody<T>;
 }
 
-/** Wrap a handler so an incoming request is accepted then run. */
+/**
+ * Wrap a handler so an incoming request is accepted then run.
+ *
+ * The jobId is acked synchronously (accept() runs before the first await), and
+ * the actual work runs concurrently: nats.js invokes subscription callbacks
+ * without awaiting them, so the caller fire-and-forgets this promise (`void`) and
+ * concurrent calls to the same action do not serialize. Because it is not
+ * awaited, a throw or rejection here would surface as an unhandledRejection and
+ * can crash the process — so once the jobId is assigned the failure is reported
+ * back to the runtime as doneWithError instead (mirrors Go/Python). The runtime
+ * is waiting on a terminal command, so a swallowed error would hang it.
+ */
 export function withJobHandler(
   jobHandler: JobHandler,
 ): (ar: ActionRequest, msg: Msg) => void | Promise<void> {
   return async (ar: ActionRequest, msg: Msg) => {
     const job = ar.accept(msg);
-    await jobHandler(job);
+    try {
+      await jobHandler(job);
+    } catch (e) {
+      await job.doneWithError(e instanceof Error ? e.message : String(e));
+    }
   };
 }
