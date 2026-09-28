@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { Msg } from "nats";
 import type { Plugin } from "./plugin.js";
 import { ActionRequest, withJobHandler } from "./req.js";
-import type { Request } from "./models.js";
+import type { Request, Signal } from "./models.js";
+import type { Conclusion, PluginSignal } from "./types.js";
 
 const encoder = new TextEncoder();
 
@@ -28,6 +29,10 @@ export const makeIntroSubject = (pluginId: string): string =>
 /** inflow.cpu.<PLUGIN_ID>.<ACTION> — the runtime's execution call. */
 export const makeActionCpu = (pluginId: string, action: string): string =>
   `inflow.cpu.${pluginId}.${action}`;
+
+/** inflow.plugin.<PLUGIN_ID>.> — the wildcard signal port (every signal kind). */
+export const makeSignalSubject = (pluginId: string): string =>
+  `inflow.plugin.${pluginId}.>`;
 
 /** inflow.v1.<PLUGIN_ID>.<ACTION>.@form */
 export const makeFormSubject = (pluginId: string, action: string): string =>
@@ -143,4 +148,64 @@ export function metaFuncHandler(p: Plugin): void {
     });
     console.log(`Meta Function Service : ${makeActionSubject(p.pluginId, meta.method)}`);
   }
+}
+
+/**
+ * Subscribe the registered signal handler (Plugin.onSignal) to the whole signal
+ * port, `inflow.plugin.<PLUGIN_ID>.>`. A plugin that never called onSignal
+ * subscribes to nothing — the port is opt-in. Mirrors Go's signalsHandler.
+ */
+export function signalsHandler(p: Plugin): void {
+  const handler = p.signalFn;
+  if (!handler) return;
+  const nc = p.infraConn.connection;
+  nc.subscribe(makeSignalSubject(p.pluginId), {
+    callback: (_err, msg) => {
+      const sig = parseSignal(p.pluginId, msg);
+      // A signal handler that blocks (closing a stream, aborting an upstream
+      // call) must not stall the signals behind it, and a rejected promise here
+      // would surface as an unhandled rejection that crashes the plugin.
+      void (async () => {
+        try {
+          await handler(sig);
+        } catch (err) {
+          console.log(`signal handler failed on ${sig.subject}:`, err);
+        }
+      })();
+    },
+  });
+  console.log(`Signals Subscribed on : ${makeSignalSubject(p.pluginId)}`);
+}
+
+/**
+ * Turn a raw signal message into a Signal: `kind` is whatever the subject
+ * carries past the plugin's prefix, and a payload that parses as the runtime's
+ * `{conclusion, jobId}` body fills the typed fields. A payload that does not
+ * parse is not an error — an unmodelled future kind still reaches the handler
+ * with its bytes intact.
+ */
+export function parseSignal(pluginId: string, msg: Msg): Signal {
+  const sig: Signal = {
+    kind: msg.subject.startsWith(`inflow.plugin.${pluginId}.`)
+      ? (msg.subject.slice(`inflow.plugin.${pluginId}.`.length) as PluginSignal)
+      : msg.subject,
+    subject: msg.subject,
+    jobId: "",
+    conclusion: "",
+    data: msg.data,
+    msg,
+  };
+  try {
+    const body = JSON.parse(new TextDecoder().decode(msg.data)) as {
+      conclusion?: string;
+      jobId?: string;
+    };
+    if (body && typeof body === "object") {
+      sig.jobId = body.jobId ?? "";
+      sig.conclusion = (body.conclusion ?? "") as Conclusion;
+    }
+  } catch {
+    /* an unmodelled kind: leave the typed fields empty, keep data */
+  }
+  return sig;
 }

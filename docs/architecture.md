@@ -64,9 +64,14 @@ its own cadence.
    settings form and submit handler.
 4. **Declare actions.** `p.addAction({...})` adds one or more methods, each with its
    own form and `requestHandler`.
-5. **Start.** `p.start()` subscribes to every subject: intro, settings, the action
-   list, each action's form, and each action's executor. It returns immediately.
-6. **Block & serve.** `await new Promise(() => {})` keeps the process alive. From here
+5. **Listen for signals (optional).** `p.onSignal(handler)` registers a handler for
+   the runtime's one-way signal port — told when a process the plugin ran has ended,
+   and how. Skip it unless the plugin holds work that must stop with the process; see
+   [jobs-and-commands.md § Signals](jobs-and-commands.md#signals--when-the-runtime-ends-a-process).
+6. **Start.** `p.start()` subscribes to every subject: intro, settings, the action
+   list, each action's form, each action's executor, and the signal port if a handler
+   was registered. It returns immediately.
+7. **Block & serve.** `await new Promise(() => {})` keeps the process alive. From here
    it is request-driven.
 
 ```ts
@@ -93,3 +98,12 @@ which is which**:
 
 Rule of thumb: a subject with a `@` part is *describe/configure me*; a subject under
 `cpu` is *run me*. See [jobs-and-commands.md](jobs-and-commands.md).
+
+Both registers are request/reply, and both are opened by the runtime asking the
+plugin something. There is one channel that is neither: the **signal port** on
+`inflow.plugin.<PLUGIN_ID>.*`, where the runtime *broadcasts* what became of a
+process it ran — finished, stopped by the user, timed out. Nothing is expected back,
+and a plugin is free never to listen. It exists for the minority of plugins whose
+in-flight work must end when the process does; the default, quite deliberately, is
+that a job outlives the process that started it. See
+[jobs-and-commands.md § Signals](jobs-and-commands.md#signals--when-the-runtime-ends-a-process).

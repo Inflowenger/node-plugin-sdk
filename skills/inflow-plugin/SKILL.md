@@ -1,6 +1,6 @@
 ---
 name: inflow-plugin-node
-description: Build an Inflowenger Plugin node with the Node.js/TypeScript SDK (@inflowenger/node-plugin-sdk). Use when the user asks to create, scaffold, or extend an inflow/Inflowenger plugin in Node/TypeScript — adding an action, parsing request input, reporting progress, reading/writing flow context, building the action's UI form, or wiring settings. Not for extrinsic nodes (those belong to inflow-fusion), and not for the Go SDK (use inflow-plugin for that).
+description: Build an Inflowenger Plugin node with the Node.js/TypeScript SDK (@inflowenger/node-plugin-sdk). Use when the user asks to create, scaffold, or extend an inflow/Inflowenger plugin in Node/TypeScript — adding an action, parsing request input, reporting progress, reading/writing flow context, building the action's UI form, wiring settings, or reacting to a stopped/timed-out process. Not for extrinsic nodes (those belong to inflow-fusion), and not for the Go SDK (use inflow-plugin for that).
 ---
 
 # Building an Inflowenger Plugin node (Node/TypeScript)
@@ -74,7 +74,10 @@ a different repo), nor for the Go SDK.
    - `castRequestTo<T>(job.req.data)` — typed input (rule 4).
    - `job.progress(pct, { title, content })` — advisory, 0–100; does not finish.
    - `job.done(obj, ...key)` — success + output (finishes).
-   - `job.doneWithError(str)` — failure, reason only (finishes).
+   - `job.doneWithError(str)` — failure (finishes); the reason goes on the command's
+     own `error` field, never into `details`.
+   - `job.doneWithErrorCode(num, str, obj, ...key)` — same, plus the plugin's own
+     error number (pass `0` when it has none).
    - `job.doneWithErrorData(str, obj, ...key)` — failure that keeps a payload/state
      alongside the reason (finishes).
    - `job.cmdGetCurrentScope()` / `job.cmdGetScope("$.path")` — read context; both
@@ -90,7 +93,24 @@ a different repo), nor for the Go SDK.
    Plugin-level onboarding/config: `p.requiredParams({ ..., submitHandler })` (or
    `formkit.form(...).settings(handler)`). Register live meta functions with
    `p.addMeta({ method, requestHandler })` before `start()`.
-5. **Build & run**: `npm run build` then run the entry, or `npx tsx your-plugin.ts`.
+5. **Only if in-flight work must stop with the process**, register a signal handler
+   before `start()`:
+   ```ts
+   import { canceled } from "@inflowenger/node-plugin-sdk";
+
+   p.onSignal((sig) => {              // inflow.plugin.<PLUGIN_ID>.>
+     if (canceled(sig.conclusion)) {  // flow_stop_by_user / stop_command / timeout / idle
+       inflight.get(sig.jobId)?.abort(); // sig.jobId === the job.jobId you were given
+     }
+   });
+   ```
+   This is **optional and not the default**: a stopped process deliberately does not
+   stop the job, because a later run of the node may build on its progress (the
+   previous `jobId` comes back in `_registry`). Add it only for a stream to close, an
+   upstream call to abort, a lock to release. Signals also arrive on success, so
+   always filter on `sig.conclusion`; and once one lands, the runtime no longer
+   answers that job's commands — do not try to `done` an abandoned job.
+6. **Build & run**: `npm run build` then run the entry, or `npx tsx your-plugin.ts`.
    The SDK logs each subscribed subject on startup. Verify by adding the node to a
    flow and running it.
 

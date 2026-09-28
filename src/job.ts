@@ -37,21 +37,27 @@ export class Job {
     });
   }
 
-  /** End the job as failed, reporting the reason as its only detail. */
+  /**
+   * End the job as failed, reporting `error` as the reason.
+   *
+   * The reason no longer travels as a detail: it goes in the command's own
+   * `error` field, and `details` is left untouched. So the job commits nothing
+   * and the flow sees a failure with a message.
+   */
   async doneWithError(error: string): Promise<Uint8Array> {
-    return this.doneWithErrorData(error, null);
+    return this.doneWithErrorCode(0, error, null);
   }
 
   /**
    * End the job as failed exactly like doneWithError, but keep a payload: `data`
-   * is reported (and committed, at `key` when given) next to the reason, which
-   * always lands on the canonical "error" detail — so a key named "error" inside
-   * `data` is overwritten.
+   * is reported (and committed, at `key` when given) alongside the reason.
+   * Nothing in `data` is reserved — the reason rides on its own field, so a key
+   * named "error" is now the plugin's to use.
    *
    * Use it when the failure still carries something the flow needs: a terminal
    * command's details ARE what gets committed onto the node's scope, so a bare
-   * doneWithError reports only "error" and anything the node had persisted there
-   * (a conversation, a cursor) is gone by the next read. Hand it back through
+   * doneWithError commits nothing and anything the node had persisted there (a
+   * conversation, a cursor) is gone by the next read. Hand it back through
    * `data` to keep it.
    */
   async doneWithErrorData(
@@ -59,12 +65,25 @@ export class Job {
     data: Record<string, unknown> | null,
     ...key: string[]
   ): Promise<Uint8Array> {
-    const details: Record<string, unknown> = { ...(data ?? {}) };
-    details.error = error;
+    return this.doneWithErrorCode(0, error, data, ...key);
+  }
+
+  /**
+   * doneWithErrorData with the plugin's own error number attached. `code`
+   * belongs to the plugin's numbering — the core carries it next to the message
+   * and never interprets it — so pass 0 when the plugin has none.
+   */
+  async doneWithErrorCode(
+    code: number,
+    error: string,
+    data: Record<string, unknown> | null,
+    ...key: string[]
+  ): Promise<Uint8Array> {
     return this.command(Command.Progress, {
       progress: 100,
-      details,
+      details: data ?? undefined,
       commit_on: key.join("."),
+      error: { code, message: error },
     });
   }
 

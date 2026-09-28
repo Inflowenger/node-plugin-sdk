@@ -12,6 +12,13 @@ async function main() {
 
   p.intro({ name: "HTTP.CALL", author: "inflow Dev. Team", version: "v0.0.1" });
 
+  // Optional: watch the runtime's signal port. This sample only logs what it
+  // hears; a plugin holding cancellable work would abort whatever it filed under
+  // sig.jobId when canceled(sig.conclusion) is true.
+  p.onSignal((sig) => {
+    console.log(`signal ${sig.kind} job=${sig.jobId} conclusion=${sig.conclusion}`);
+  });
+
   // Action 1: perform a real outbound HTTP request driven by the node's form.
   p.addAction({
     method: "http.call",

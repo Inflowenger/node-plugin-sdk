@@ -177,9 +177,17 @@ await job.done({ status: "ok", result });
 // Success, committing on an explicit key path (segments joined by ".")
 await job.done(payload, "result", "http");
 
-// Failure — completes with an error payload
+// Failure — completes as failed, reporting the reason
 await job.doneWithError("upstream returned 500");
+
+// Failure carrying the plugin's own error number too
+await job.doneWithErrorCode(429, "upstream rate limited", null);
 ```
+
+The reason travels on the command's own `error` field (`{code, message}`), not as a
+detail — so `details` are yours alone, and a bare `doneWithError` commits nothing.
+`code` is the plugin's own numbering; the core carries it without interpreting it,
+so pass `0` when the plugin has none.
 
 > **Pattern:** on every error branch, `await job.doneWithError(...)` **and `return`**.
 
@@ -255,8 +263,8 @@ return;
 ```
 
 Failing does **not** stop the flow — downstream nodes still run. A terminal command's
-details are what commit onto the node's scope, so use `doneWithErrorData` (not the
-bare `doneWithError`) whenever the node had persisted state it must not drop.
+details are what commit onto the node's scope, and a bare `doneWithError` sends none,
+so use `doneWithErrorData` whenever the node had persisted state it must not drop.
 
 ---
 
@@ -279,6 +287,66 @@ p.requiredParams({
 > value is marshalled verbatim. Set `submit_to` on a form to name one for on-submit
 > validation, or hang a `formkit` `.lookup(fn, label)` button off a field. See
 > [docs/form-builder.md](docs/form-builder.md).
+
+---
+
+## Skill 13 — React when a process ends (signals, optional)
+
+The runtime broadcasts on `inflow.plugin.<PLUGIN_ID>.proc` every time a plugin node
+process ends — with the `jobId` and a conclusion (`done`, `flow_stop_by_user`,
+`timeout`, …). `p.onSignal` subscribes to that port; call it **before `start()`**.
+
+```ts
+p.onSignal((sig) => {
+  console.log(`job ${sig.jobId} ended: ${sig.conclusion}`);
+});
+```
+
+**Skip this skill unless you need it.** A stopped or timed-out process does *not*
+stop the job you accepted, by design: the next run of that node may build on the
+progress this one made — the runtime hands the previous `jobId` back in `_registry`.
+Only reach for `onSignal` when the work itself must die with the process: an open
+stream, a paid upstream call, a held lock.
+
+File the aborter under the `jobId` and let the signal find it:
+
+```ts
+import { canceled } from "@inflowenger/node-plugin-sdk";
+
+const inflight = new Map<string, AbortController>();
+
+p.onSignal((sig) => {
+  if (!canceled(sig.conclusion)) return; // done / next / failed: nothing to abort
+  inflight.get(sig.jobId)?.abort();
+  inflight.delete(sig.jobId);
+});
+
+p.addAction({
+  method: "long.export",
+  requestHandler: async (job: Job) => {
+    const ac = new AbortController();
+    inflight.set(job.jobId, ac);
+    try {
+      const res = await fetch(url, { signal: ac.signal });
+      await job.done({ ok: res.ok });
+    } catch (err) {
+      await job.doneWithError(String(err));
+    } finally {
+      inflight.delete(job.jobId);
+    }
+  },
+});
+```
+
+Gotchas:
+
+- Signals arrive on **success too** — always filter on `sig.conclusion`
+  (`canceled()` / `succeeded()`).
+- When the signal lands the runtime has already stopped listening to that job, so an
+  abandoned handler's `progress`/`done` will find no responder. Wind down quietly.
+- Handlers are not awaited; only the last one registered is kept.
+
+Full treatment: [docs/jobs-and-commands.md § Signals](docs/jobs-and-commands.md#signals--when-the-runtime-ends-a-process).
 
 ---
 
@@ -332,7 +400,9 @@ p.addAction({
 ## Recipe C — A long-running / event plugin
 
 The plugin is a persistent process, so it can hold connections and run loops between
-requests. Open shared resources once, reuse across handlers:
+requests. Open shared resources once, reuse across handlers. This is also the shape
+most likely to want [Skill 13](#skill-13--react-when-a-process-ends-signals-optional):
+background work that should be torn down when the process that started it is stopped.
 
 ```ts
 async function main() {

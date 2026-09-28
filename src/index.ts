@@ -18,7 +18,7 @@ export { Job } from "./job.js";
 
 export { ActionRequest, castRequestTo, withJobHandler } from "./req.js";
 
-export { Command } from "./types.js";
+export { Command, PluginSignal, Conclusion, succeeded, canceled } from "./types.js";
 
 export { NatsBox } from "./nats.js";
 
@@ -34,12 +34,15 @@ export type {
   Meta,
   Frame,
   CommandPayload,
+  ErrorPayload,
   JobBodyContent,
   Response,
   Request,
   RequestBody,
   ActionRequestContent,
   CallSvcBody,
+  Signal,
+  SignalHandler,
 } from "./models.js";
 
 // formkit — optional form builder (JSON Schema + JSON Forms UI Schema).

@@ -177,12 +177,19 @@ p.addAction({
   requestHandler: async (job) => { /* the work */ },
 });
 
-// 4. Start serving and block
+// 4. (optional) Listen to the runtime's signal port — told when a process this
+//    plugin ran has ended, and how. Only needed if in-flight work must stop too.
+p.onSignal((sig) => {
+  if (canceled(sig.conclusion)) cancelWorkFor(sig.jobId);
+});
+
+// 5. Start serving and block
 p.start();
 await new Promise(() => {});
 ```
 
-`start()` wires up all the NATS subscriptions and returns. Because the SDK serves
+`start()` wires up all the NATS subscriptions (including the signal port when a
+handler was registered) and returns. Because the SDK serves
 asynchronously, your entry point must stay alive afterwards (`await new Promise(() => {})`).
 
 ---
@@ -222,8 +229,9 @@ async (job: Job) => {
 |--------|--------|
 | `job.progress(pct, frame)` | Report progress `0–100` with a titled status frame. |
 | `job.done(data, ...key)`   | Complete (progress 100) and emit `data`; optional key path to commit on. |
-| `job.doneWithError(msg)`   | Complete as failed, reporting `msg` as the only detail. |
-| `job.doneWithErrorData(msg, data, ...key)` | Complete as failed but keep `data` (and commit it) alongside the reason. |
+| `job.doneWithError(msg)`   | Complete as failed: `msg` rides on the command's own `error` field, no details committed. |
+| `job.doneWithErrorData(msg, data, ...key)` | Same, but keep `data` (and commit it) alongside the reason — nothing in it is reserved. |
+| `job.doneWithErrorCode(code, msg, data, ...key)` | Same, plus the plugin's own error number. |
 | `job.cmdGetCurrentScope()` | Fetch the current context scope (`Uint8Array`). |
 | `job.cmdGetScope(path)`    | Fetch a slice of context by JSON path. |
 | `job.cmdSetOnPath(path, o)`| Commit data into the flow context at a JSON path. |
@@ -234,14 +242,43 @@ Full semantics and the underlying subjects: [docs/jobs-and-commands.md](docs/job
 
 ---
 
+## Signals — knowing a process ended (`onSignal`)
+
+The runtime broadcasts on `inflow.plugin.<PLUGIN_ID>.proc` whenever a plugin node
+process ends, saying which job it was and how it ended: `done`, `flow_stop_by_user`,
+`timeout`, and so on. `p.onSignal(handler)` — registered before `start()` —
+subscribes to that port.
+
+```ts
+import { canceled, succeeded } from "@inflowenger/node-plugin-sdk";
+
+p.onSignal((sig) => {
+  if (canceled(sig.conclusion)) {
+    abort(sig.jobId);          // sig.jobId === the job's job.jobId
+  }
+});
+```
+
+**This is optional, and ignoring it is a valid choice.** A stopped process does not
+stop the job: that is on purpose, because the next process on the same node may build
+on the progress this one made — the runtime hands the previous `jobId` back in
+`_registry`. Register a handler only where the work itself must not outlive the
+process: a stream to close, an upstream call to abort, a reservation to release. Note
+that a signal also arrives on success, and that by the time it lands the runtime no
+longer answers that job's commands.
+
+See [docs/jobs-and-commands.md § Signals](docs/jobs-and-commands.md#signals--when-the-runtime-ends-a-process).
+
+---
+
 ## Documentation
 
 | Doc | What's in it |
 |-----|--------------|
 | [cookbook.md](cookbook.md) | **Start here to build one** — a task-organized cookbook. |
 | [docs/architecture.md](docs/architecture.md) | Where the plugin node sits in Inflowenger, and the plugin lifecycle. |
-| [docs/protocol-inflowv1.md](docs/protocol-inflowv1.md) | The `inflowv1` wire protocol: subjects, request/response shapes, the job handshake. |
-| [docs/jobs-and-commands.md](docs/jobs-and-commands.md) | The `Job` API in depth. |
+| [docs/protocol-inflowv1.md](docs/protocol-inflowv1.md) | The `inflowv1` wire protocol: subjects, request/response shapes, the job handshake, the one-way signal port. |
+| [docs/jobs-and-commands.md](docs/jobs-and-commands.md) | The `Job` API in depth, plus the signal port (`onSignal`). |
 | [docs/form-builder.md](docs/form-builder.md) | Building action & settings UIs with JSON Forms. |
 | [docs/examples.md](docs/examples.md) | Annotated walkthrough of the `HTTP.CALL` and `RPC` sample plugins. |
 | [docs/inflow-ecosystem.md](docs/inflow-ecosystem.md) | Working notes on the broader Inflowenger platform. |
@@ -275,11 +312,11 @@ processes.
 node-plugin-sdk/
 ├── src/                   the SDK (mirrors the Go sdkv1 package)
 │   ├── plugin.ts          Plugin class, construction, options, NATS send
-│   ├── inflowV1.ts        subject wiring: intro / settings / actions / forms
+│   ├── inflowV1.ts        subject wiring: intro / settings / actions / forms / signals
 │   ├── job.ts             Job: progress, done, context commands
 │   ├── req.ts             request parsing, castRequestTo, job handshake
 │   ├── models.ts          protocol data types (PluginIntro, Action, FormBuilder, …)
-│   ├── types.ts           command constants (progress/stop/context/commit)
+│   ├── types.ts           command constants, signal kinds & conclusions
 │   ├── nats.ts            NATS connection from base64 decorated credentials
 │   ├── env.ts             dotenv loading
 │   └── index.ts           public API barrel
@@ -297,7 +334,8 @@ This is a faithful port of [`go-plugin-sdk`](https://github.com/Inflowenger/go-p
 same lifecycle. Naming follows each language's idiom (Go's `NewPlugin`/`AddAction` →
 `newPlugin`/`addAction`; `job.Done` → `job.done`), and blocking I/O is `async`/`await`
 instead of Go's synchronous calls. This includes the `formkit` form builder (as the
-`formkit` namespace) and meta-function registration via `p.addMeta(...)`.
+`formkit` namespace), meta-function registration via `p.addMeta(...)`, and the
+optional signal port via `p.onSignal(...)` (Go's `OnSignal`).
 
 ## License
 

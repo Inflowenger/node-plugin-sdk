@@ -4,6 +4,7 @@
 
 import type { Msg, MsgHdrs } from "nats";
 import type { Job } from "./job.js";
+import type { Conclusion, PluginSignal } from "./types.js";
 
 /** Anything the runtime can talk to over NATS. Mirrors Go's IPlugin. */
 export interface IPlugin {
@@ -134,6 +135,26 @@ export interface CommandPayload {
   frame?: Frame;
   details?: Record<string, unknown>;
   commit_on?: string;
+  /**
+   * Set only by the doneWithError family, and what makes a finished job a failed
+   * one — `details` is still committed either way.
+   */
+  error?: ErrorPayload;
+}
+
+/**
+ * How a terminal command reports a failure. Its presence — not its contents — is
+ * the verdict: the core concludes the job failed whenever the field is there,
+ * even with an empty message.
+ *
+ * `code` is the plugin's own error number, in the plugin's own numbering. The
+ * core does not interpret it or map it onto a fractal status; it carries it so
+ * the plugin's owner can be asked what it means. Leave it 0 when the plugin has
+ * no such numbering. Mirrors Go's ErrorPayload.
+ */
+export interface ErrorPayload {
+  code: number;
+  message: string;
 }
 
 /** Payload of a `commit` command. Mirrors Go's JobBodyContent. */
@@ -181,3 +202,47 @@ export interface CallSvcBody {
   data: unknown;
   op?: Record<string, unknown>;
 }
+
+/**
+ * One runtime message on the plugin's signal port,
+ * `inflow.plugin.<PLUGIN_ID>.<KIND>` — a broadcast OUT of the runtime about a
+ * process, not a request: nothing is expected back and no reply is read.
+ *
+ * Today the only kind is PluginSignal.Proc, published when the runtime finishes
+ * with a plugin node process; the port is a wildcard subscription, so future
+ * kinds arrive at the same handler with a different `kind` and, possibly, a
+ * payload this type does not model — hence `data`. Mirrors Go's Signal.
+ */
+export interface Signal {
+  /**
+   * The subject remainder after `inflow.plugin.<PLUGIN_ID>.`, e.g. "proc".
+   * Switch on it before trusting the parsed fields below.
+   */
+  kind: PluginSignal | string;
+  /** The full NATS subject the signal arrived on. */
+  subject: string;
+  /**
+   * The job this signal is about — the very uuid the SDK minted in the
+   * request→job handshake and handed to the handler as `job.jobId`, so a plugin
+   * can match a signal to the work it still has in flight.
+   */
+  jobId: string;
+  /**
+   * How the runtime ended that process. Set for "proc" signals; empty for a kind
+   * that carries no conclusion.
+   */
+  conclusion: Conclusion | string;
+  /** The raw payload, kept verbatim so an unmodelled future kind is readable. */
+  data: Uint8Array;
+  /**
+   * The underlying NATS message (headers, subject, reply). Present for the
+   * escape hatch; a signal is a publish, so do not respond to it.
+   */
+  msg: Msg;
+}
+
+/**
+ * Receives every message that lands on the plugin's signal port. Registered with
+ * Plugin.onSignal. Mirrors Go's SignalHandler.
+ */
+export type SignalHandler = (sig: Signal) => void | Promise<void>;

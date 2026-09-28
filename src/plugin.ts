@@ -7,6 +7,7 @@ import {
   introHandler,
   metaFuncHandler,
   settingsHandler,
+  signalsHandler,
 } from "./inflowV1.js";
 import type {
   Action,
@@ -14,6 +15,8 @@ import type {
   Meta,
   PluginIntro,
   Settings,
+  Signal,
+  SignalHandler,
 } from "./models.js";
 
 /** A functional option applied during newPlugin. Mirrors Go's func(*Plugin) error. */
@@ -63,6 +66,8 @@ export class Plugin implements IPlugin {
   settingsData?: Settings;
   actions: Action[] = [];
   metaFn: Meta[] = [];
+  /** The signal-port handler registered with onSignal(); undefined = not listening. */
+  signalFn?: SignalHandler;
   /**
    * NATS request/reply deadline for send(), in ms. Defaults to
    * DEFAULT_SEND_TIMEOUT_MS; set it in code with the withSendTimeout() option
@@ -98,12 +103,45 @@ export class Plugin implements IPlugin {
     this.metaFn.push(...meta);
   }
 
+  /**
+   * Register the handler for the plugin's signal port — every subject under
+   * `inflow.plugin.<PLUGIN_ID>.>`, the runtime's one-way broadcast channel about
+   * processes this plugin is running (see Signal). Call it before start(), which
+   * does the subscribing; passing undefined registers a handler that only logs
+   * what arrives, which is enough to watch the port during development.
+   *
+   * It is entirely OPTIONAL. A plugin that never calls it behaves exactly as
+   * before, and that is the norm: when a process is stopped or times out, the
+   * job the plugin took on deliberately keeps running, because a later process
+   * may pick up where it left off — the runtime hands the previous jobId back in
+   * `_registry`, so progress made after the stop is not wasted. Register a
+   * handler only for the cases where the work itself must also stop: a stream to
+   * close, an upstream call to abort, a reservation to release. Then test
+   * canceled(sig.conclusion) and cancel the work you filed under sig.jobId.
+   *
+   * Only the last registered handler is kept. Handlers are invoked without being
+   * awaited, so signals for different jobs may overlap, and a rejection inside
+   * one is caught and logged rather than taking the process down.
+   *
+   * Mirrors Go's Plugin.OnSignal.
+   */
+  onSignal(handler?: SignalHandler): void {
+    this.signalFn =
+      handler ??
+      ((sig: Signal) => {
+        console.log(
+          `signal on ${sig.subject} received: ${new TextDecoder().decode(sig.data)}`,
+        );
+      });
+  }
+
   /** Wire up all subscriptions. Returns immediately — keep the process alive after. */
   start(): void {
     introHandler(this);
     settingsHandler(this);
     actionsHandler(this);
     metaFuncHandler(this);
+    signalsHandler(this);
   }
 
   /**
