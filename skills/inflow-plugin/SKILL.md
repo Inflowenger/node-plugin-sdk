@@ -123,6 +123,21 @@ a different repo), nor for the Go SDK.
 - A form button (`formkit` `.lookup(fn, label)`, or a hand-written `x-inflow-ui`
   control) calls a meta function and patches the answer back into the open form — one
   match via `formkit.success(...).patch({...})`, several via `formkit.choose(...)`.
+- **There is no error channel in the transport.** Say what happened under the
+  reserved `x-inflow-notif` key, which the host lifts out of the answer and shows —
+  or the button appears to do nothing:
+  ```ts
+  return formkit.success("Issue: %s", key).patch({ issueKey: key });
+  return formkit.failure("cannot reach %s: %s", site, err).patch(null); // message only
+  ```
+  `formkit.info` / `success` / `warning` / `failure` / `help` are the five severities;
+  `.about(field)` re-aims a message, `.patch(null)` is a valid answer on its own (a
+  connection test writes nothing). The message defaults to the field the button
+  targets; a field some *other* control fills needs `.inline()` on it so the host has
+  somewhere to put it. Do **not** add a readonly `lookupStatus`-style property for
+  this — a message is not form data, and one declared as a field is sent to the
+  service and stored with the rest. The catalog's `dependent-fields.md` still
+  describes the pre-`x-inflow-notif` status-field workaround; this supersedes it.
 - If asked about **extrinsic** nodes, redirect to inflow-fusion; not part of this SDK.
 
 ## Verify before finishing
