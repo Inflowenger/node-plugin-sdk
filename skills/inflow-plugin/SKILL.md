@@ -18,6 +18,23 @@ and concept docs under
 Verify the current API against the installed `@inflowenger/node-plugin-sdk` package
 before relying on any signature; do not invent methods.
 
+The **[plugin catalog](https://github.com/Inflowenger/plugin-catalog)** is the other live resource worth reading: it
+carries the current developer knowledge base —
+[`concepts.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/concepts.md) (the mental model),
+[`build-a-plugin.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/build-a-plugin.md) (build from zero),
+[`run-a-plugin.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/run-a-plugin.md),
+[`dependent-fields.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/dependent-fields.md),
+[`sdks.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/sdks.md) (the SDK matrix) and
+[`publishing.md`](https://github.com/Inflowenger/plugin-catalog/blob/main/docs/publishing.md) — plus
+[`plugins/`](https://github.com/Inflowenger/plugin-catalog/tree/main/plugins), an entry per shipped plugin pointing at its
+real source. Those are the best worked examples available: in Node, [clickhouse-plugin](https://github.com/Inflowenger/clickhouse-plugin),
+[mysql-plugin](https://github.com/Inflowenger/mysql-plugin),
+[qdrant-plugin](https://github.com/Inflowenger/qdrant-plugin) and
+[gmail-oc-plugin](https://github.com/FloMorphic/gmail-oc-plugin). Prefer their
+patterns over inventing your own, and check
+[`plugins/index.json`](https://github.com/Inflowenger/plugin-catalog/blob/main/plugins/index.json) for the machine-readable
+list.
+
 ## When to use
 
 Use this when building or modifying an inflow **plugin** node in **Node/TypeScript**:
@@ -85,6 +102,10 @@ a different repo), nor for the Go SDK.
    - `job.cmdSetOnPath("$.path", obj)` — write into flow context.
    - `job.cmdNextFilter(tags)` — fire only the outbound branch(es) with these tags.
    - `job.cmdSvcCall(action, data, op?)` — call a downstream service mid-job.
+   - Any path above may start at `$this`, inflow's non-standard root for the
+     location this run was handed (the slice the node's `scope` selected), e.g.
+     `job.cmdGetScope("$this.customer.id")`. Prefer it over a hardcoded index when
+     the node's scope can select more than one location.
 4. **Add forms** when the node needs configuration. Either hand-write JSON Forms —
    `form: { jsonschema: JSON.stringify(schema), jsonui: JSON.stringify(ui) }` — or
    build both documents from one declaration with the `formkit` namespace:
@@ -92,7 +113,9 @@ a different repo), nor for the Go SDK.
    `form: formkit.form("Title").add(formkit.text("k","K").required()).build()`.
    Plugin-level onboarding/config: `p.requiredParams({ ..., submitHandler })` (or
    `formkit.form(...).settings(handler)`). Register live meta functions with
-   `p.addMeta({ method, requestHandler })` before `start()`.
+   `p.addMeta({ method, requestHandler })` before `start()`. An optional Markdown
+   manual for the plugin's page goes on `p.intro({ ..., manual })`; a fenced
+   ` ```inflow-meta ` block naming a meta method becomes a Run button.
 5. **Only if in-flight work must stop with the process**, register a signal handler
    before `start()`:
    ```ts
@@ -138,7 +161,17 @@ a different repo), nor for the Go SDK.
   this — a message is not form data, and one declared as a field is sent to the
   service and stored with the rest. The catalog's `dependent-fields.md` still
   describes the pre-`x-inflow-notif` status-field workaround; this supersedes it.
-- If asked about **extrinsic** nodes, redirect to inflow-fusion; not part of this SDK.
+
+## Known limitations to respect
+
+- A form action **cannot mutate the schema** — answers are patched into form *data*
+  only, so you cannot populate a `<select>`'s `enum` at runtime. Model a picker as
+  free text + a resolve button (scalar fields) or as an array field filled with a
+  returned list (multi-value). Do not invent an options-loading API.
+- Nothing fires automatically: no on-change, no debounce, no type-ahead. The user
+  clicks. Label the button with what it does.
+- If asked for anything about **extrinsic** nodes, redirect to `inflow-fusion`; it
+  is not part of this SDK.
 
 ## Verify before finishing
 
