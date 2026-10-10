@@ -9,6 +9,7 @@ import {
   settingsHandler,
   signalsHandler,
 } from "./inflowV1.js";
+import { jobID, use, type MiddlewareFunc, type Middlewares } from "./middleware.js";
 import type {
   Action,
   IPlugin,
@@ -74,6 +75,16 @@ export class Plugin implements IPlugin {
    * (or assign directly before start()).
    */
   sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS;
+  /**
+   * The middleware function every request runs first, naming the job; undefined
+   * means `jobID`. See withJobID.
+   */
+  jobIDFn?: MiddlewareFunc;
+  /**
+   * Middleware that runs on every action's requests, after `jobIDFn` and before
+   * the action's own. See use().
+   */
+  middlewares: Middlewares = [];
 
   getPluginId(): string {
     return this.pluginId;
@@ -101,6 +112,27 @@ export class Plugin implements IPlugin {
    */
   addMeta(...meta: Meta[]): void {
     this.metaFn.push(...meta);
+  }
+
+  /**
+   * Add middleware functions that run on the requests of every action, in the
+   * order given — after `jobID`, before each action's own `Action.middleware`.
+   * Call it before start(). Mirrors Go's Plugin.Use.
+   */
+  use(...fns: Array<MiddlewareFunc | undefined | null>): void {
+    this.middlewares = [...this.middlewares, ...use(...fns)];
+  }
+
+  /**
+   * The middleware a request of `action` runs, in order: the job's namer, the
+   * plugin's, then the action's own.
+   */
+  pipeline(action: Action): Middlewares {
+    return [
+      this.jobIDFn ?? jobID,
+      ...this.middlewares,
+      ...use(...(action.middleware ?? [])),
+    ];
   }
 
   /**
@@ -224,6 +256,19 @@ export function withInfraConnection(
 ): PluginOption {
   return async (p) => {
     p.infraConn = await NatsBox.create(credential, infraUrl);
+  };
+}
+
+/**
+ * Replace `jobID` as the middleware function every request runs first, for a
+ * plugin that names its jobs its own way. It must bind the id with
+ * `withJobIDContext` — the SDK takes `job.jobId` from there — since everything
+ * after it keys on the jobId; a request it leaves unnamed is rejected. Mirrors
+ * Go's WithJobID.
+ */
+export function withJobID(namer: MiddlewareFunc): PluginOption {
+  return (p) => {
+    p.jobIDFn = namer;
   };
 }
 

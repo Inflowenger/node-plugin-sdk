@@ -4,6 +4,7 @@
 
 import type { Msg, MsgHdrs } from "nats";
 import type { Job } from "./job.js";
+import type { Middlewares } from "./middleware.js";
 import type { Conclusion, PluginSignal } from "./types.js";
 
 /** Anything the runtime can talk to over NATS. Mirrors Go's IPlugin. */
@@ -83,6 +84,16 @@ export interface Action {
    * undefined for a single-class plugin. Mirrors Go's Action.Tags.
    */
   tags?: Record<string, string>;
+  /**
+   * The action's own middleware functions, run in order after the plugin's
+   * (`Plugin.use`) and before the job is accepted — a plain array, or built with
+   * `use(fn, ...)`; see MiddlewareFunc. Optional.
+   *
+   * Excluded from the `@actions` payload like every handler here (see
+   * actionsPayload: a function value is dropped by JSON.stringify, but an array
+   * of them would marshal as `[null, null]`, so this field is removed by name).
+   */
+  middleware?: Middlewares;
   /** Not serialized to the wire (functions are dropped by JSON.stringify). */
   requestHandler: JobHandler;
 }

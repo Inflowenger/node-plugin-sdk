@@ -42,6 +42,13 @@ export function castRequestTo<T>(data: Uint8Array): RequestBody<T> {
 /**
  * Wrap a handler so an incoming request is accepted then run.
  *
+ * Kept for compatibility — and for a plugin that drives the handshake itself.
+ * The SDK's own request path is `runPipeline` in inflowV1.ts, which runs the
+ * action's middleware before accepting; this skips that, so a job it accepts has
+ * no middleware context (`job.context()` is the background context) and nothing
+ * `jobstop` can cancel. Pass actions through `Plugin.addAction` to get the
+ * pipeline.
+ *
  * The jobId is acked synchronously (accept() runs before the first await), and
  * the actual work runs concurrently: nats.js invokes subscription callbacks
  * without awaiting them, so the caller fire-and-forgets this promise (`void`) and

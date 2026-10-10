@@ -1,6 +1,6 @@
 ---
 name: inflow-plugin-node
-description: Build an Inflowenger Plugin node with the Node.js/TypeScript SDK (@inflowenger/node-plugin-sdk). Use when the user asks to create, scaffold, or extend an inflow/Inflowenger plugin in Node/TypeScript — adding an action, parsing request input, reporting progress, reading/writing flow context, building the action's UI form, wiring settings, or reacting to a stopped/timed-out process. Not for extrinsic nodes (those belong to inflow-fusion), and not for the Go SDK (use inflow-plugin for that).
+description: Build an Inflowenger Plugin node with the Node.js/TypeScript SDK (@inflowenger/node-plugin-sdk). Use when the user asks to create, scaffold, or extend an inflow/Inflowenger plugin in Node/TypeScript — adding an action, parsing request input, reporting progress, reading/writing flow context, building the action's UI form, wiring settings, adding middleware, stopping a job when its flow stops (jobstop), running a job under an external service's id, or observing work that outlives the flow run. Not for extrinsic nodes (those belong to inflow-fusion), and not for the Go SDK (use inflow-plugin for that).
 ---
 
 # Building an Inflowenger Plugin node (Node/TypeScript)
@@ -102,6 +102,8 @@ a different repo), nor for the Go SDK.
    - `job.cmdSetOnPath("$.path", obj)` — write into flow context.
    - `job.cmdNextFilter(tags)` — fire only the outbound branch(es) with these tags.
    - `job.cmdSvcCall(action, data, op?)` — call a downstream service mid-job.
+   - `job.context()` — the job's `JobContext` (cancellation + values) when the action
+     has middleware; a background context otherwise. See step 5.
    - Any path above may start at `$this`, inflow's non-standard root for the
      location this run was handed (the slice the node's `scope` selected), e.g.
      `job.cmdGetScope("$this.customer.id")`. Prefer it over a hardcoded index when
@@ -116,24 +118,114 @@ a different repo), nor for the Go SDK.
    `p.addMeta({ method, requestHandler })` before `start()`. An optional Markdown
    manual for the plugin's page goes on `p.intro({ ..., manual })`; a fenced
    ` ```inflow-meta ` block naming a meta method becomes a Run button.
-5. **Only if in-flight work must stop with the process**, register a signal handler
-   before `start()`:
+5. **Only if in-flight work must stop with the process**, compose the `jobstop`
+   capability onto that action and the signal port, before `start()`:
    ```ts
-   import { canceled } from "@inflowenger/node-plugin-sdk";
+   import { jobstop, type Job } from "@inflowenger/node-plugin-sdk";
 
-   p.onSignal((sig) => {              // inflow.plugin.<PLUGIN_ID>.>
-     if (canceled(sig.conclusion)) {  // flow_stop_by_user / stop_command / timeout / idle
-       inflight.get(sig.jobId)?.abort(); // sig.jobId === the job.jobId you were given
-     }
+   const stops = new jobstop.Registry();   // one per plugin
+   p.onSignal(stops.onSignal);             // cancels the job a canceled() signal names
+   p.addAction({
+     method: "run",
+     middleware: [stops.middleware],       // this action only
+     requestHandler: async (job: Job) => {
+       const ctx = job.context();           // ends when the flow is stopped
+       const res = await fetch(url, { signal: ctx.signal }); // aborts with it
+       if (ctx.canceled) return;            // the runtime is gone — do NOT done()
+       await job.done({ ok: res.ok });
+     },
    });
    ```
-   This is **optional and not the default**: a stopped process deliberately does not
-   stop the job, because a later run of the node may build on its progress (the
-   previous `jobId` comes back in `_registry`). Add it only for a stream to close, an
-   upstream call to abort, a lock to release. Signals also arrive on success, so
-   always filter on `sig.conclusion`; and once one lands, the runtime no longer
-   answers that job's commands — do not try to `done` an abandoned job.
-6. **Build & run**: `npm run build` then run the entry, or `npx tsx your-plugin.ts`.
+   Use it; do not hand-write a `Map` of `AbortController`s. Without
+   `p.onSignal(stops.onSignal)` no stop arrives (`start()` logs "Signals not
+   subscribed"). Middleware runs before the runtime knows the jobId, so no stop is
+   ever lost. This is **optional and not the default**: a job without it deliberately
+   keeps running after a stop, because a later run of the node may build on its
+   progress (the previous `jobId` comes back in `_registry`). Add it only for a stream
+   to close, an upstream call to abort, a lock to release.
+
+   `job.context()` is a `JobContext` — the Node stand-in for Go's `context.Context`,
+   built on `AbortSignal`: `ctx.signal` for `fetch`, `ctx.canceled` / `ctx.cause`
+   (e.g. `jobstop.ErrStopped`), `await ctx.sleep(ms)` (false ⇒ stopped) for polling
+   loops, `ctx.onDone(cb)` for cleanup however the job ends, `ctx.withoutCancel()` for
+   work that must outlive the handler, `ctx.withTimeout(ms)` for one bounded step.
+   An action with no middleware gets a background context, never cancelled, so
+   `ctx.canceled` is always safe to read.
+
+   Other per-job capabilities — a long-running job kept in your own map, a trace
+   around the handler — are middleware functions of your own
+   (`(ctx: JobContext, job: Job) => JobContext | void`, run in order before the job is
+   accepted; register there, clean up with `ctx.onDone(...)`; a **throw rejects** the
+   request), listed as `middleware: [...]` on an action or `p.use(...)` on every
+   action. Several signal handlers compose with `chainSignals(...)` — chain
+   `logSignals("<plugin>")` to keep a log line per arriving signal, which registering
+   a handler of your own otherwise replaces (`jobstop` logs the cancel itself). Once a
+   stop cancels `ctx`, the runtime no longer answers that job's commands — do not try
+   to `done` it. An aborted `fetch` **throws**; the SDK will not report a handler that
+   throws while its context is already cancelled, but catch it yourself where you have
+   cleanup to do.
+6. **If the plugin fronts a service that names work itself** (a Joern HTTP server
+   answering `POST /query` with a `queryId`, a render farm, a scan), **do not keep a
+   `Map<jobId, upstreamId>`.** Register upstream in a middleware function and bind the
+   id it returns as the job's own — middleware runs before the job is accepted, so
+   that id is what the runtime is told:
+   ```ts
+   async function registerQuery(ctx: JobContext, job: Job): Promise<JobContext> {
+     const input = castRequestTo<QueryInput>(job.req.data); // throws ⇒ request rejected
+     const prev = input._registry?.jobId as string | undefined;
+     if (prev && (await joern.alive(prev))) {
+       return withJobIDContext(ctx, prev); // reattach, don't duplicate
+     }
+     const queryId = await joern.register(input.body.project, input.body.query);
+     return withJobIDContext(ctx, queryId);
+   }
+   // namer FIRST — stops.middleware files the job under job.jobId as of when it runs
+   middleware: [registerQuery, stops.middleware],
+   ```
+   One name then serves both systems: `job.jobId`, every command subject, the stop
+   signal's `jobId`, and the next run's `_registry.jobId`. The abort needs no local
+   state — `joern.cancel(sig.jobId)` in the signal handler, so any replica that hears
+   the stop can forward it. Rules: the namer comes **before** anything keyed on the
+   jobId; validate the adopted id — at least **10 characters** (fractal-core rejects a
+   shorter one: `init failed. invalid job ID`), a usable NATS subject token (no `.`,
+   space, `*`, `>`), unique plugin-wide; keep the registration call fast and
+   timeout-bounded (the runtime is waiting for the jobId); reject from middleware when
+   there is nothing to report, accept and `job.doneWithError` when the flow should see
+   a failed node; undo what you enlisted with `ctx.onDone(...)`, which also runs when a
+   later function rejects. If the service accepts a client-supplied id instead, do the
+   mirror image — keep the SDK's uuid and send `job.jobId` upstream. Full treatment:
+   [`docs/external-job-identity.md`](https://github.com/Inflowenger/node-plugin-sdk/blob/main/docs/external-job-identity.md).
+7. **If the external work takes longer than a flow run** (hours: a CPG build, a
+   render, a nightly scan), **do not block the job.** The runtime waits 15s for the
+   `jobId`, abandons a job that sends no command for the node's `idle_min`, and ends
+   the run at `ExecuteTimeOut`. Report state and end instead — the plugin is an async
+   function, the flow an observer:
+   ```ts
+   // accept stage: the only inputs are body and _registry (the node's memory of its
+   // own previous run; job commands need a jobId, which this decides)
+   if (prev && (await joern.has(prev))) return withJobIDContext(ctx, prev); // observe
+   // handler:
+   if (!status.done) {
+     await job.cmdNextFilter(["pending"]);  // a SUCCESSFUL "not yet" — never doneWithError
+     await job.done({ state: "running", percent: status.percent }, "joern");
+   } else {
+     await job.cmdNextFilter(["ready"]);
+     await job.done({ result: status.result }, "joern"); // commit, with a key
+   }
+   ```
+   Declare the ports (`outbound: [{ title: "Still running", tags: ["pending"] }, …]`)
+   so the canvas shows them, and route `_exception` + `doneWithErrorData` when the work
+   failed upstream. Rules: the state snapshot must be **committed**
+   (`done(data, key)` — a bare `done` commits nothing); `_registry` is per **call
+   site** and lives in the context document, so re-entry must be over the **same
+   context** (a Continue After/delay node on the pending branch, a schedule, or a loop
+   edge) and the loop needs a floor (attempt counter, or a `reqAt` age limit);
+   `doneAt` / `conclusion` describe the *run*, not the work — a pending run ends
+   `done`; handle the **stale handle** (service forgot the id → start fresh); and add
+   **no** `stops.middleware` to an observer action, because outliving the flow is the
+   point. Full treatment:
+   [`docs/detached-work.md`](https://github.com/Inflowenger/node-plugin-sdk/blob/main/docs/detached-work.md).
+8. **Build & run**: `npm run build` then run the entry, or `npx tsx your-plugin.ts`.
    The SDK logs each subscribed subject on startup. Verify by adding the node to a
    flow and running it.
 
@@ -175,10 +267,13 @@ a different repo), nor for the Go SDK.
 
 ## Verify before finishing
 
-- `npm run build` (tsc) passes with no type errors.
+- `npm run build` (tsc) passes with no type errors, and `npm test` is green.
 - The entry point blocks after `start()`.
 - Each action: unique `method`, a `requestHandler`, exactly one finish per path, all
   Job calls `await`ed.
 - Each `jsonschema` matches its input type.
 - No fabricated SDK methods — every `Job`/`Plugin` call exists in the installed
   `@inflowenger/node-plugin-sdk`.
+- If any action uses `jobstop`: `p.onSignal(stops.onSignal)` is registered **before**
+  `start()`, the namer (if any) is first in `middleware`, and the handler returns on
+  `ctx.canceled` instead of reporting.

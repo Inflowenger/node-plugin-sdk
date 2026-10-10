@@ -154,6 +154,22 @@ p.onSignal((sig) => {
 Register it **before `start()`** — `start()` does the subscribing. `p.onSignal()`
 with no argument installs a handler that just logs the port, handy while developing.
 
+Registering a handler of your own replaces that logging — the port goes quiet just
+as the plugin starts acting on it. `logSignals("<plugin>")` is that same line as a
+handler you can keep beside your own:
+
+```ts
+p.onSignal(chainSignals(logSignals("ai-decision"), stops.onSignal));
+// ai-decision: signal proc job=<uuid> conclusion=flow_stop_by_user canceled=true succeeded=false
+// jobstop: job <uuid> cancelled: the runtime concluded its process flow_stop_by_user
+```
+
+Two lines, because they are two events: the signal **arriving**, and a job of this
+process being **cut short** by it — the second comes from
+`jobstop.Registry.onSignal`, which logs only the jobs it holds. One subject carries
+every signal of the plugin, so the first line also appears for jobs of other flows,
+and of other replicas, that this process never accepted; those get no second line.
+
 ```ts
 interface Signal {
   kind: PluginSignal | string; // "proc" — the subject past inflow.plugin.<PLUGIN_ID>.
@@ -187,46 +203,193 @@ calls `onSignal` behaves exactly as it always has — **nothing breaks by ignori
 this**. Register a handler only for work that genuinely must not outlive the process:
 a stream to close, an upstream request to abort, a lock or reservation to release.
 
-File cancellable work under its `jobId` and let the signal find it:
+File cancellable work under its `jobId` and let the signal find it — and file it
+*before the runtime knows the jobId*, which is what middleware is for.
+
+### Middleware — functions run before the job is accepted
+
+Every action request runs a list of **middleware functions**, in order, before the
+job is accepted:
 
 ```ts
-import { canceled } from "@inflowenger/node-plugin-sdk";
+type MiddlewareFunc = (
+  ctx: JobContext,
+  job: Job,
+) => JobContext | void | Promise<JobContext | void>;
+```
 
-const inflight = new Map<string, AbortController>();
+```
+request ─▶ jobID ─▶ plugin's (p.use) ─▶ action's (Action.middleware) ─▶ accept: reply jobId ─▶ handler
+```
 
-p.onSignal((sig) => {
-  if (!canceled(sig.conclusion)) return; // done / next / failed — nothing to abort
-  inflight.get(sig.jobId)?.abort();
-  inflight.delete(sig.jobId);
-});
+A plain array is the list; `use(...)` builds one while dropping empty slots:
 
+```ts
+p.use(trace);                                  // every action
 p.addAction({
-  method: "long.export",
-  requestHandler: async (job) => {
-    const ac = new AbortController();
-    inflight.set(job.jobId, ac);
-    try {
-      const res = await fetch(url, { signal: ac.signal });
-      await job.done({ ok: res.ok });
-    } catch (err) {
-      await job.doneWithError(String(err));
-    } finally {
-      inflight.delete(job.jobId);
-    }
-  },
+  method: "run",
+  middleware: [stops.middleware, register],    // this action, in this order
+  requestHandler,
 });
 ```
 
-Two things to keep in mind:
+- **`jobID`** runs first: it binds a fresh jobId (a UUID) to the context —
+  `jobIDFromContext(ctx)` reads it — and the SDK sets `job.jobId` from it, so every
+  function after it sees the job named. It is a function like any other:
+  `withJobID(fn)` (a `newPlugin` option) replaces it for a plugin that names its jobs
+  its own way. A function later in the chain may rename the job too — the SDK keeps
+  `job.jobId` in step with the context after *every* function — which is how a plugin
+  runs a job under an id its upstream service minted: see
+  [external-job-identity.md](external-job-identity.md).
+- Each function gets the context the one before it returned, and returns it — with
+  whatever it bound — for the next; the last one's is the handler's `job.context()`.
+  Returning nothing keeps the context it was given, so a function with only a side
+  effect needs no return.
+- Then the job is **accepted** — the jobId replied to the runtime — and the handler
+  runs.
 
-- **Signals arrive for every ending, including `done`.** Filter on `conclusion`.
-- **The runtime is already gone.** By the time the signal lands, that job's command
-  subjects have no responder: a `progress` or `done` from the abandoned handler will
-  retry and fail. Wind the work down; do not try to report it.
+Because they run before the reply, the runtime does not know the jobId while they
+run: nothing can happen to the job — a stop, a query from a later run — before what a
+function set up under that jobId is in place.
+
+```ts
+function register(ctx: JobContext, job: Job) {
+  runs.set(job.jobId, { status: "running" }); // before the runtime knows the jobId
+  return ctx;
+}
+```
+
+- **A throw rejects the request**: the runtime gets the error instead of a jobId, and
+  neither the functions after it nor the handler run. A rejected promise from an
+  `async` function is the same thing. (This is what Go gets from an `error` return
+  plus panic recovery.)
+- **The job's context ends when the handler returns** (like an `http.Request`'s), or
+  when the request is rejected. A function that must clean up when the job ends does
+  it with `ctx.onDone(cleanup)`.
+- A function may be `async` and the SDK awaits it, but the runtime gives up on a
+  jobId it waits too long for (15s), so keep it quick. One request's middleware never
+  holds up another's: each request runs its pipeline on its own.
+
+### `JobContext` — the job's cancellation and value scope
+
+`job.context()` is the context the middleware passed down. It is the Node
+counterpart of Go's `context.Context`, built on `AbortSignal`:
+
+| What you want | Call |
+|---|---|
+| Hand cancellation to `fetch`, a stream, any abortable API | `ctx.signal` |
+| Ask whether the job has been cut short | `ctx.canceled` |
+| Ask *why* it ended | `ctx.cause` (e.g. `jobstop.ErrStopped`) |
+| Wait, or stop waiting when the job ends | `await ctx.sleep(ms)` → `false` if it ended |
+| Run cleanup when the job ends, however it ends | `ctx.onDone((cause) => …)` |
+| Carry a value down the chain | `ctx.withValue(key, v)` / `ctx.value(key)` |
+| Keep work alive past the handler | `ctx.withoutCancel()` |
+| Put a deadline on one step | `const [c, cancel] = ctx.withTimeout(5_000)` |
+
+A job from an action with no middleware answers a background context — never
+cancelled — so a handler may read `ctx.canceled` unconditionally.
+
+The SDK adds no capability to a job on its own. Each one is a middleware function you
+list where it is needed — and, if it reacts to how processes end, a signal handler:
+
+| Capability | Middleware function | Signal port |
+|------------|---------------------|-------------|
+| Stop with the flow | `stops.middleware` | `stops.onSignal` |
+| A long-running job kept for a later run | yours, filing the jobId in your own map | yours, if it reacts to endings |
+| Tracing | yours: start a span, end it with `ctx.onDone` | — |
+| [An external service's job id as the jobId](external-job-identity.md) | yours: register upstream, bind the id with `withJobIDContext` | yours: abort upstream by `sig.jobId` |
+
+The port keeps one handler: `chainSignals(h1, h2, …)` composes several into one.
+
+### Stopping a job with its flow — `jobstop`
+
+`jobstop` is the stop capability, built from the two pieces above:
+
+```ts
+import { jobstop, type Job } from "@inflowenger/node-plugin-sdk";
+
+const stops = new jobstop.Registry(); // one per plugin
+
+p.onSignal(stops.onSignal); // before start() — without it, no stop ever arrives
+p.addAction({
+  method: "long.export",
+  middleware: [stops.middleware],
+  requestHandler: exportHandler,
+});
+
+async function exportHandler(job: Job) {
+  const ctx = job.context();
+  try {
+    const res = await fetch(url, { signal: ctx.signal }); // aborts with the flow
+    await job.done({ ok: res.ok });
+  } catch (err) {
+    if (ctx.canceled) return; // stopped by the runtime: nobody is listening
+    await job.doneWithError(String(err));
+  }
+}
+```
+
+`stops.middleware` files the job under its jobId before it is accepted, and unfiles
+it when its context ends; `stops.onSignal` cancels it when the runtime concludes its
+process as `canceled()` (cause `jobstop.ErrStopped`) and unfiles it on any other
+ending. `stops.cancelAll()` cancels every job it holds (cause
+`jobstop.ErrShutdown`), for a plugin about to exit; it sends nothing to the runtime.
+Without `p.onSignal(stops.onSignal)` the signal port is not subscribed — `start()`
+logs `Signals not subscribed on …` — and no stop arrives.
+
+**Isolation is by `jobId`, and it has to be.** The runtime publishes every process
+signal of a plugin on one subject, `inflow.plugin.<PLUGIN_ID>.proc`, so every process
+of that plugin hears all of them: the endings of jobs in other flows running at the
+same time, and — when the plugin runs as several replicas — of jobs this process never
+accepted. The payload carries no flowId; the `jobId` is the only discriminator on the
+wire. A stop for a job the registry does not hold does nothing.
+
+Three things to keep in mind:
+
+- **Signals arrive for every ending, including `done`.** `stops.onSignal` cancels on
+  `canceled()` only; a hand-written handler should filter on `conclusion` the same
+  way.
+- **The runtime is already gone.** By the time a stop cancels `ctx`, that job's
+  command subjects have no responder: a `progress` or `done` from the stopped handler
+  retries and fails, slowly. Check `ctx.canceled` and return — not the error a library
+  returned, which may not say it was cancelled.
+- **An abort usually surfaces as a throw.** `fetch` on an aborted signal rejects with
+  an `AbortError`, which would otherwise unwind out of the handler and be reported as
+  a failed job. The SDK guards that last step — a handler that throws while its
+  context is already cancelled reports nothing and logs instead — but catch it
+  yourself where the handler has cleanup to do. (Go has no equivalent of this guard,
+  because there a cancellation is a returned error the handler inspects.)
 
 Handlers are invoked without being awaited (so a slow one does not stall the port)
 and a rejection inside one is caught and logged. Only the last registered handler is
 kept.
+
+### Beyond stopping: work that outlives the process
+
+Two patterns build on the pieces above, and both start from the same place — a
+middleware function that decides what the job *is* before the runtime is told:
+
+#### One id across two systems
+
+The pieces above compose into something larger than cancellation. A plugin that
+fronts a service with its own job ids — a Joern server, a render farm — can **adopt
+that id as the jobId** in a middleware function, so the runtime, the plugin and the
+service all name the work the same way: no correlation map, a stop that any replica
+can forward upstream, and a re-run that reattaches to the previous run's upstream work
+through `_registry`. That pattern, its invariants and its failure modes are
+[external-job-identity.md](external-job-identity.md).
+
+#### The flow as an observer
+
+Work measured in hours fits in no job: the runtime waits 15s for a `jobId`, gives up
+on a job that goes quiet for the node's `idle_min`, and ends the run at
+`ExecuteTimeOut`. So a plugin can decline to wait — report *where the work has got
+to*, route a "not yet" port with `cmdNextFilter`, and `done` in seconds. The flow's
+process finishes, the external work does not, and a later run of the same node reads
+`_registry.jobId`, finds the work still running and reports again — until the run that
+finds it finished commits the result and routes the ready branch. Asynchrony stays
+inside the plugin, where the knowledge is; the graph needs no node type for it. See
+[detached-work.md](detached-work.md).
 
 ## Command reference
 

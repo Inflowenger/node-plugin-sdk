@@ -1,5 +1,6 @@
 // The Job handle passed to an action handler. Mirrors sdkv1/job.go.
 import type { Msg } from "nats";
+import { background, type JobContext } from "./context.js";
 import { Command } from "./types.js";
 import type {
   CallSvcBody,
@@ -17,12 +18,55 @@ export class Job {
   readonly action: string;
   readonly jobId: string;
   readonly req: Request;
+  private readonly ctx?: JobContext;
 
-  constructor(plugin: IPlugin, action: string, jobId: string, req: Request) {
+  constructor(
+    plugin: IPlugin,
+    action: string,
+    jobId: string,
+    req: Request,
+    ctx?: JobContext,
+  ) {
     this.plugin = plugin;
     this.action = action;
     this.jobId = jobId;
     this.req = req;
+    this.ctx = ctx;
+  }
+
+  /**
+   * The job's context: the one its middleware passed down (see MiddlewareFunc),
+   * carrying the jobId (`jobIDFromContext`) and whatever the middleware bound to
+   * it, and ended by the SDK when the handler returns. A job built by hand — and
+   * one from an action with no middleware — answers the background context,
+   * which is never cancelled, so a handler may call this unconditionally.
+   *
+   * Like an `http.Request`'s, it lives as long as the handler: work the handler
+   * leaves running after it returns must not hold it — derive that work's
+   * context with `ctx.withoutCancel()`, which keeps the values (a trace) and
+   * drops the cancellation.
+   */
+  context(): JobContext {
+    return this.ctx ?? background();
+  }
+
+  /**
+   * A copy of the job carrying `ctx` as its `context()`. The SDK uses it to hand
+   * a handler what its middleware passed down; a handler can use it to pass a
+   * narrowed context along with the job.
+   */
+  withContext(ctx: JobContext): Job {
+    return new Job(this.plugin, this.action, this.jobId, this.req, ctx);
+  }
+
+  /**
+   * A copy of the job named `jobId`. The SDK uses it to keep `job.jobId` in step
+   * with the id bound to the context after each middleware function; a handler
+   * has no reason to call it — renaming an accepted job would address its
+   * commands to a job the runtime does not know.
+   */
+  withJobId(jobId: string): Job {
+    return new Job(this.plugin, this.action, jobId, this.req, this.ctx);
   }
 
   /** Complete the job (progress 100) and emit `data` as this node's output. */

@@ -178,10 +178,11 @@ p.addAction({
 });
 
 // 4. (optional) Listen to the runtime's signal port — told when a process this
-//    plugin ran has ended, and how. Only needed if in-flight work must stop too.
-p.onSignal((sig) => {
-  if (canceled(sig.conclusion)) cancelWorkFor(sig.jobId);
-});
+//    plugin ran has ended, and how. To stop an action's work with its flow, add
+//    the jobstop capability: p.onSignal(stops.onSignal) here, and
+//    middleware: [stops.middleware] on that action
+//    (see docs/jobs-and-commands.md § Middleware).
+p.onSignal((sig) => { /* observe */ });
 
 // 5. Start serving and block
 p.start();
@@ -267,7 +268,37 @@ process: a stream to close, an upstream call to abort, a reservation to release.
 that a signal also arrives on success, and that by the time it lands the runtime no
 longer answers that job's commands.
 
-See [docs/jobs-and-commands.md § Signals](docs/jobs-and-commands.md#signals--when-the-runtime-ends-a-process).
+### Stopping a job with its flow — `jobstop`
+
+Rather than hand-rolling a `Map` of aborters, add the stop capability to the actions
+that need it: a middleware function on the action, a signal handler on the port.
+
+```ts
+import { jobstop, type Job } from "@inflowenger/node-plugin-sdk";
+
+const stops = new jobstop.Registry();
+
+p.onSignal(stops.onSignal);           // before start() — or no stop ever arrives
+p.addAction({
+  method: "long.export",
+  middleware: [stops.middleware],     // opt in, per action
+  requestHandler: async (job: Job) => {
+    const ctx = job.context();                             // ends with the flow
+    const res = await fetch(url, { signal: ctx.signal });  // aborts with it
+    if (ctx.canceled) return;         // the runtime has stopped listening
+    await job.done({ ok: res.ok });
+  },
+});
+```
+
+Middleware functions run **before the job is accepted**, so nothing can happen to a
+job before what a function set up under its jobId is in place. They are plain
+functions — `(ctx, job) => ctx` — and a throw from one rejects the request, so the
+same mechanism carries per-job registration, tracing, and naming a job from an
+upstream service's id.
+
+See [docs/jobs-and-commands.md § Signals](docs/jobs-and-commands.md#signals--when-the-runtime-ends-a-process)
+and [§ Middleware](docs/jobs-and-commands.md#middleware--functions-run-before-the-job-is-accepted).
 
 ---
 
@@ -278,7 +309,9 @@ See [docs/jobs-and-commands.md § Signals](docs/jobs-and-commands.md#signals--wh
 | [cookbook.md](cookbook.md) | **Start here to build one** — a task-organized cookbook. |
 | [docs/architecture.md](docs/architecture.md) | Where the plugin node sits in Inflowenger, and the plugin lifecycle. |
 | [docs/protocol-inflowv1.md](docs/protocol-inflowv1.md) | The `inflowv1` wire protocol: subjects, request/response shapes, the job handshake, the one-way signal port. |
-| [docs/jobs-and-commands.md](docs/jobs-and-commands.md) | The `Job` API in depth, plus the signal port (`onSignal`). |
+| [docs/jobs-and-commands.md](docs/jobs-and-commands.md) | The `Job` API in depth, plus middleware, `JobContext`, `jobstop` and the signal port (`onSignal`). |
+| [docs/external-job-identity.md](docs/external-job-identity.md) | Advanced: running a job under an external service's own job id — middleware that names the job, cancellation that reaches the service, and the distributed-transaction model behind it. |
+| [docs/detached-work.md](docs/detached-work.md) | Advanced: work that outlives the flow run — the plugin as an async function and the flow as observer, through `_registry` and a "not yet" port. |
 | [docs/form-builder.md](docs/form-builder.md) | Building action & settings UIs with JSON Forms. |
 | [docs/examples.md](docs/examples.md) | Annotated walkthrough of the `HTTP.CALL` and `RPC` sample plugins. |
 | [docs/inflow-ecosystem.md](docs/inflow-ecosystem.md) | Working notes on the broader Inflowenger platform. |
@@ -334,8 +367,22 @@ This is a faithful port of [`go-plugin-sdk`](https://github.com/Inflowenger/go-p
 same lifecycle. Naming follows each language's idiom (Go's `NewPlugin`/`AddAction` →
 `newPlugin`/`addAction`; `job.Done` → `job.done`), and blocking I/O is `async`/`await`
 instead of Go's synchronous calls. This includes the `formkit` form builder (as the
-`formkit` namespace), meta-function registration via `p.addMeta(...)`, and the
-optional signal port via `p.onSignal(...)` (Go's `OnSignal`).
+`formkit` namespace), meta-function registration via `p.addMeta(...)`, the optional
+signal port via `p.onSignal(...)` (Go's `OnSignal`), the middleware pipeline
+(`Action.middleware` / `p.use`, Go's `Action.Middleware` / `Plugin.Use`) and the
+`jobstop` stop capability (Go's `jobstop` package, here the `jobstop` namespace).
+
+Two places where the idiom genuinely differs, both around cancellation:
+
+- **The job's context.** Go passes a `context.Context` down the pipeline; here it is a
+  `JobContext` built on `AbortSignal`, so `ctx.signal` goes straight into `fetch`.
+  `ctx.canceled` / `ctx.cause` / `ctx.onDone` / `ctx.sleep` / `ctx.withoutCancel` are
+  the counterparts of `ctx.Err()`, `context.Cause`, `context.AfterFunc`, a `select` on
+  `ctx.Done()`, and `context.WithoutCancel`.
+- **A middleware function signals failure by throwing**, where Go's returns an
+  `error`; and a handler that throws *after* its job was stopped reports nothing (the
+  runtime has stopped listening). Go needs no such guard, because there a cancellation
+  is a returned error the handler inspects rather than an exception that unwinds.
 
 ## License
 
